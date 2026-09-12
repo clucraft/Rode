@@ -282,3 +282,38 @@ Five screens do not justify Redux; a single `useSyncExternalStore` store
 mirrors the WebSocket. Plain CSS with custom properties keeps the instrument
 aesthetic under control and the bundle at ~108 KB gzipped, which matters on
 a metered cellular link.
+
+## 7.1 — Notification secrets live in the database, masked on the way out
+
+**Context.** Tokens for ntfy/Pushover/Telegram must be editable from the
+UI, and `.env` is the only other place they could live.
+
+**Decision.** Stored in the `settings` table under `notifications`. The
+admin API returns every secret as `••••••••`; a PUT that sends the mask
+back keeps the stored value. Environment variables (`RODE_NTFY_URL` and
+friends) form an extra implicit recipient named `environment` so a compose
+file alone can configure push without touching the UI. Nothing in either
+path is ever logged (pino redaction covers `*.token`, `*.password`).
+
+## 7.2 — Every delivery attempt is an event
+
+`notification-sent` and `notification-failed` go into the append-only log
+with recipient, channel, attempt, status and duration. The newest success
+anywhere is the "notifications last confirmed working" timestamp shown in
+the status strip. The anchor-set and weigh confirmations exist to make that
+timestamp fresh at the moment the crew is paying attention.
+
+## 7.3 — Pushover criticals use emergency priority
+
+Priority 2 repeats every 60 s for an hour until the phone acknowledges. That
+is intrusive by design: it is the "get up now" tier. Warnings use priority
+1 (high, respects quiet hours). ntfy criticals use priority 5, which maps to
+iOS critical alerts when the app is set up for them.
+
+## 7.4 — The supervisor restarts the tick loop in-process first
+
+When the engine heartbeat stops advancing for 15 s the supervisor logs a
+critical event, notifies, and calls `engine.stop(); engine.start()`.
+`/readyz` has already gone 503, so if that does not take, Docker restarts
+the container. Two layers, because the second one costs a rehydration and a
+notification of its own.

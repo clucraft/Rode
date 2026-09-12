@@ -35,6 +35,25 @@ const Env = z.object({
     .optional()
     .transform((v) => v === '1' || v === 'true'),
   RODE_REPLAY_FILE: z.string().optional(),
+  // Environment-defined notification targets (an implicit recipient "environment").
+  RODE_NTFY_URL: z.string().optional(),
+  RODE_NTFY_TOKEN: z.string().optional(),
+  RODE_PUSHOVER_USER: z.string().optional(),
+  RODE_PUSHOVER_TOKEN: z.string().optional(),
+  RODE_TELEGRAM_BOT_TOKEN: z.string().optional(),
+  RODE_TELEGRAM_CHAT_ID: z.string().optional(),
+  RODE_WEBHOOK_URL: z.string().optional(),
+  /** MQTT broker for retained state + notifications, e.g. mqtt://mosquitto:1883 */
+  RODE_MQTT_URL: z.string().optional(),
+  RODE_MQTT_USERNAME: z.string().optional(),
+  RODE_MQTT_PASSWORD: z.string().optional(),
+  RODE_MQTT_TOPIC_PREFIX: z.string().default('rode'),
+  RODE_SMTP_HOST: z.string().optional(),
+  RODE_SMTP_PORT: z.coerce.number().int().optional(),
+  RODE_SMTP_USER: z.string().optional(),
+  RODE_SMTP_PASS: z.string().optional(),
+  RODE_SMTP_FROM: z.string().optional(),
+  RODE_HEARTBEAT_EMAIL: z.string().optional(),
   /** Set true when served over TLS: Secure cookies + HSTS. */
   RODE_TLS: z
     .string()

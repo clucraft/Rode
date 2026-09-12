@@ -59,6 +59,16 @@ export function Shell() {
                 ? 'none'
                 : `${fmtDuration(gps * 1000)} old`}
           </span>
+          <span title="Last successful notification delivery">
+            <span
+              className={`dot ${state?.health.notificationsLastConfirmedAt && Date.now() - state.health.notificationsLastConfirmedAt < 48 * 3_600_000 ? 'live' : 'warn'}`}
+              aria-hidden="true"
+            />
+            notify{' '}
+            {state?.health.notificationsLastConfirmedAt
+              ? `ok ${fmtDuration(Date.now() - state.health.notificationsLastConfirmedAt)} ago`
+              : 'unconfirmed'}
+          </span>
           {state?.health.unexpectedRestart ? (
             <span className="pill warn" title="The box restarted without a clean shutdown">
               restarted

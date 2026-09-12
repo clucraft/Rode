@@ -12,6 +12,7 @@ import { authenticate, configureGuard, setupGate } from './auth/guard.js';
 import { anchorRoutes } from './routes/anchor.js';
 import { authRoutes } from './routes/auth.js';
 import { diagnosticsRoutes } from './routes/diagnostics.js';
+import { notificationRoutes } from './routes/notifications.js';
 import { settingsRoutes } from './routes/settings.js';
 import { stateRoutes } from './routes/state.js';
 import { zoneRoutes } from './routes/zones.js';
@@ -151,6 +152,7 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
   zoneRoutes(app, ctx);
   settingsRoutes(app, ctx);
   diagnosticsRoutes(app, ctx);
+  notificationRoutes(app, ctx);
   websocketRoutes(app, ctx);
 
   const webDir = ctx.config.RODE_WEB_DIR;

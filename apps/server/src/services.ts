@@ -7,6 +7,11 @@ import { createRepos, type Repos } from './db/repos.js';
 import { Diagnostics } from './diagnostics.js';
 import { createAuthRepos } from './auth/repos.js';
 import { AuthService } from './auth/service.js';
+import { Dispatcher } from './notify/dispatcher.js';
+import { Heartbeat } from './notify/heartbeat.js';
+import { MqttPublisher } from './notify/mqtt.js';
+import { Supervisor } from './supervisor.js';
+import type { ChannelTarget, Recipient } from '@rode/protocol';
 import { EngineHost } from './engine/host.js';
 import { IngestManager } from './ingest/manager.js';
 import { Housekeeping, SampleWriter } from './jobs/samples.js';
@@ -24,6 +29,8 @@ const CLEAN_SHUTDOWN = 'clean_shutdown';
 export interface Services extends AppContext {
   sampleWriter: SampleWriter;
   housekeeping: Housekeeping;
+  supervisor: Supervisor;
+  mqtt: MqttPublisher | null;
   /** Mutable so the notification layer (phase 7) can stamp confirmations. */
   notifications: { lastConfirmedAt: number | null };
   start(): Promise<void>;
@@ -110,6 +117,65 @@ export function createServices(opts: ServiceOptions): Services {
     now,
   });
 
+  // ---- notifications
+  const envRecipient = envRecipientFrom(config);
+  const dispatcher = new Dispatcher({
+    settingsRepo: repos.settings,
+    events: repos.events,
+    bus,
+    log,
+    envRecipient,
+    units: () => settings.units(),
+    boatName: () => settings.view().boatName,
+    now,
+  });
+  if (config.RODE_SMTP_HOST && !dispatcher.getSettings().smtp.host) {
+    dispatcher.updateSettings({
+      ...dispatcher.getSettings(),
+      smtp: {
+        host: config.RODE_SMTP_HOST,
+        port: config.RODE_SMTP_PORT ?? 587,
+        secure: (config.RODE_SMTP_PORT ?? 587) === 465,
+        user: config.RODE_SMTP_USER ?? '',
+        pass: config.RODE_SMTP_PASS ?? '',
+        from: config.RODE_SMTP_FROM ?? config.RODE_SMTP_USER ?? '',
+      },
+    });
+  }
+  const heartbeat = new Heartbeat({
+    dispatcher,
+    runtime: repos.runtime,
+    normalizer: ingest.normalizer,
+    engineState: () => engine.getState(),
+    bootedAt,
+    boatName: () => settings.view().boatName,
+    timeZone: () => settings.view().timeZone,
+    sourceView: () => ingest.view(),
+    gpsSynced: () => ingest.normalizer.getGpsTime() !== null,
+    log,
+    now,
+  });
+  const supervisor = new Supervisor({
+    engine,
+    events: repos.events,
+    dispatcher,
+    log,
+    boatName: () => settings.view().boatName,
+    now,
+  });
+  const mqttPublisher = config.RODE_MQTT_URL
+    ? new MqttPublisher({
+        url: config.RODE_MQTT_URL,
+        username: config.RODE_MQTT_USERNAME,
+        password: config.RODE_MQTT_PASSWORD,
+        topicPrefix: config.RODE_MQTT_TOPIC_PREFIX,
+        bus,
+        log,
+        engineState: () => engine.getState(),
+        now,
+      })
+    : null;
+
   const notifications = { lastConfirmedAt: null as number | null };
   const state: StateDeps = {
     engine,
@@ -119,7 +185,8 @@ export function createServices(opts: ServiceOptions): Services {
     bootedAt,
     unexpectedRestart,
     timeZone: () => settings.view().timeZone,
-    notificationsLastConfirmedAt: () => notifications.lastConfirmedAt,
+    notificationsLastConfirmedAt: () =>
+      dispatcher.getStats().lastConfirmedAt ?? notifications.lastConfirmedAt,
     now,
   };
 
@@ -140,18 +207,36 @@ export function createServices(opts: ServiceOptions): Services {
     ingest,
     diagnostics,
     auth,
+    notify: { dispatcher, heartbeat, envRecipient },
     state,
     version: config.RODE_VERSION,
     bootedAt,
     now,
     sampleWriter,
     housekeeping,
+    supervisor,
+    mqtt: mqttPublisher,
     notifications,
     async start() {
+      dispatcher.start();
       engine.start();
       diagnostics.start();
       sampleWriter.start();
       housekeeping.start();
+      heartbeat.start();
+      supervisor.start();
+      mqttPublisher?.start();
+      // An unexpected restart while the owner is away is exactly the thing
+      // not to paper over.
+      if (unexpectedRestart) {
+        dispatcher.notify({
+          at: now(),
+          severity: 'warning',
+          title: `${settings.view().boatName}: Rode restarted unexpectedly`,
+          body: `The box came back up without a clean shutdown (boot ${bootCount}). ${engine.rehydrated ? 'The anchor session was restored and the watch resumed.' : 'No anchor session was active.'}`,
+          data: { event: 'unexpected-restart', bootCount },
+        });
+      }
       distanceTimer = setInterval(() => {
         engine.recordDistance();
         auth.housekeeping();
@@ -165,6 +250,10 @@ export function createServices(opts: ServiceOptions): Services {
     },
     async stop() {
       if (distanceTimer) clearInterval(distanceTimer);
+      supervisor.stop();
+      heartbeat.stop();
+      await dispatcher.stop();
+      await mqttPublisher?.stop();
       housekeeping.stop();
       sampleWriter.stop();
       diagnostics.stop();
@@ -176,4 +265,60 @@ export function createServices(opts: ServiceOptions): Services {
     },
   };
   return services;
+}
+
+/** An implicit recipient built from RODE_NTFY_URL & co, so a compose file alone can configure push. */
+export function envRecipientFrom(c: Config): Recipient | null {
+  const channels: ChannelTarget[] = [];
+  if (c.RODE_NTFY_URL)
+    channels.push({
+      kind: 'ntfy',
+      enabled: true,
+      severities: ['info', 'warning', 'critical'],
+      url: c.RODE_NTFY_URL,
+      token: c.RODE_NTFY_TOKEN ?? '',
+    });
+  if (c.RODE_PUSHOVER_USER && c.RODE_PUSHOVER_TOKEN)
+    channels.push({
+      kind: 'pushover',
+      enabled: true,
+      severities: ['info', 'warning', 'critical'],
+      token: c.RODE_PUSHOVER_TOKEN,
+      user: c.RODE_PUSHOVER_USER,
+    });
+  if (c.RODE_TELEGRAM_BOT_TOKEN && c.RODE_TELEGRAM_CHAT_ID)
+    channels.push({
+      kind: 'telegram',
+      enabled: true,
+      severities: ['info', 'warning', 'critical'],
+      botToken: c.RODE_TELEGRAM_BOT_TOKEN,
+      chatId: c.RODE_TELEGRAM_CHAT_ID,
+    });
+  if (c.RODE_WEBHOOK_URL)
+    channels.push({
+      kind: 'webhook',
+      enabled: true,
+      severities: ['info', 'warning', 'critical'],
+      url: c.RODE_WEBHOOK_URL,
+      headers: {},
+    });
+  if (c.RODE_MQTT_URL)
+    channels.push({
+      kind: 'mqtt',
+      enabled: true,
+      severities: ['info', 'warning', 'critical'],
+      url: c.RODE_MQTT_URL,
+      username: c.RODE_MQTT_USERNAME ?? '',
+      password: c.RODE_MQTT_PASSWORD ?? '',
+      topicPrefix: c.RODE_MQTT_TOPIC_PREFIX,
+    });
+  if (c.RODE_HEARTBEAT_EMAIL)
+    channels.push({
+      kind: 'email',
+      enabled: true,
+      severities: ['info'],
+      to: c.RODE_HEARTBEAT_EMAIL,
+    });
+  if (channels.length === 0) return null;
+  return { id: 'env', name: 'environment', enabled: true, channels };
 }
