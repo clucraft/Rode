@@ -53,7 +53,11 @@ export function History() {
         </thead>
         <tbody>
           {data.sessions.map((s) => {
-            const g = s.geometry as { swingRadius?: number; scopeRatio?: number } | null;
+            const g = s.geometry as {
+              swingRadius?: number;
+              scopeRatio?: number;
+              radiusOverride?: { swingRadius: number } | null;
+            } | null;
             return (
               <tr key={s.id}>
                 <td>
@@ -63,7 +67,9 @@ export function History() {
                 </td>
                 <td>{s.mode}</td>
                 <td>{s.endedAt ? fmtDuration(s.endedAt - s.startedAt) : 'active'}</td>
-                <td className="num">{fmtDistance(g?.swingRadius, units).value}</td>
+                <td className="num">
+                  {fmtDistance(g?.radiusOverride?.swingRadius ?? g?.swingRadius, units).value}
+                </td>
                 <td className="num">{s.mode === 'anchor' ? fmtScope(g?.scopeRatio).value : '—'}</td>
                 <td className="num">{fmtDistance(s.maxDistance, units).value}</td>
                 <td className="num">
@@ -128,7 +134,9 @@ export function SessionDetail() {
     depthAtDrop: number;
     horizontalRun: number;
     tideRange: number;
+    radiusOverride?: { swingRadius: number; warnRadius: number; mode: string } | null;
   };
+  const watched = g?.radiusOverride ?? null;
 
   return (
     <div className="stack">
@@ -149,11 +157,19 @@ export function SessionDetail() {
       {g ? (
         <div className="readouts num">
           <div className="readout">
-            <span className="label">Radius</span>
+            <span className="label">{watched ? 'Radius (manual)' : 'Radius'}</span>
             <span className="value">
-              {fmtDistance(g.swingRadius, units).value}
-              <span className="unit">{fmtDistance(g.swingRadius, units).unit}</span>
+              {fmtDistance(watched?.swingRadius ?? g.swingRadius, units).value}
+              <span className="unit">
+                {fmtDistance(watched?.swingRadius ?? g.swingRadius, units).unit}
+              </span>
             </span>
+            {watched ? (
+              <span className="sub">
+                computed {fmtDistance(g.swingRadius, units).value}{' '}
+                {fmtDistance(g.swingRadius, units).unit}
+              </span>
+            ) : null}
           </div>
           <div className="readout">
             <span className="label">Rode</span>
@@ -284,6 +300,16 @@ export function describeEvent(e: EventRecord): string {
         ? `anchor set · radius ${g.swingRadius.toFixed(0)} m, rode ${g.rodeLength.toFixed(0)} m, scope ${g.scopeRatio.toFixed(1)}:1`
         : 'anchor set';
     }
+    case 'radius-overridden': {
+      const o = d.override as { swingRadius: number; warnRadius: number; mode: string } | undefined;
+      return o
+        ? `circle edited by ${String(d.by)} · alarm ${o.swingRadius.toFixed(0)} m, warning ${o.warnRadius.toFixed(0)} m (${o.mode})`
+        : 'circle edited';
+    }
+    case 'radius-override-cleared':
+      return `circle reset to computed by ${String(d.by)}`;
+    case 'geometry-recomputed':
+      return `settings changed · alarm ${Number(d.swingRadius).toFixed(0)} m, warning ${Number(d.warnRadius).toFixed(0)} m`;
     case 'acknowledged':
       return `acknowledged by ${String(d.by)}`;
     case 'alarm-refire':

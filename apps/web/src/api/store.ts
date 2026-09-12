@@ -1,5 +1,13 @@
 import { useSyncExternalStore } from 'react';
-import type { ClientMessage, EventRecord, FullState, ServerMessage } from '@rode/protocol';
+import type {
+  ClientMessage,
+  EventRecord,
+  FullState,
+  ServerMessage,
+  ViewPrefs,
+  ViewPrefsPatch,
+} from '@rode/protocol';
+import { api } from './client.js';
 
 /*
  * The live state store. One WebSocket, a snapshot then deltas, exponential
@@ -28,6 +36,27 @@ export interface StoreSnapshot {
 }
 
 const CACHE_KEY = 'rode:last-state';
+/** Slider moves are coalesced before they go to the server. */
+const PREFS_FLUSH_MS = 300;
+
+/** Merge a patch, ignoring undefined values (a partial never clears a pref). */
+function mergePrefs(base: ViewPrefs, ...patches: (ViewPrefsPatch | undefined)[]): ViewPrefs {
+  const out: Record<string, unknown> = { ...base };
+  for (const patch of patches) {
+    if (!patch) continue;
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) out[k] = v;
+  }
+  return out as unknown as ViewPrefs;
+}
+
+export const DEFAULT_PREFS: ViewPrefs = {
+  trackHours: 6,
+  showAis: true,
+  watchView: 'polar',
+  imagerySource: null,
+  showPreviousAnchor: true,
+  trafficFitAll: true,
+};
 const MAX_EVENTS = 200;
 const PING_MS = 15_000;
 /** No message for this long on an open socket → consider it dead. */
@@ -54,6 +83,8 @@ class StateStore {
   private watchdog: number | null = null;
   private pingSentAt = 0;
   private started = false;
+  private pendingPrefs: ViewPrefsPatch = {};
+  private prefsTimer: number | null = null;
 
   subscribe = (l: Listener): (() => void) => {
     this.listeners.add(l);
@@ -88,6 +119,29 @@ class StateStore {
     savePref('rode:low-bandwidth', on ? '1' : '0');
     this.set({ lowBandwidth: on });
     this.send({ type: 'subscribe', lowBandwidth: on });
+  }
+
+  /**
+   * Shared display preferences live on the server so every device agrees.
+   * Applied locally at once; sent after a short pause so a slider does not
+   * produce a request per pixel. The server's answer (and the websocket
+   * delta) then confirms or corrects.
+   */
+  patchPrefs(patch: ViewPrefsPatch): void {
+    const state = this.snapshot.state;
+    if (state) {
+      this.set({ state: { ...state, prefs: mergePrefs(state.prefs, patch) } });
+    }
+    this.pendingPrefs = { ...this.pendingPrefs, ...patch };
+    if (this.prefsTimer) window.clearTimeout(this.prefsTimer);
+    this.prefsTimer = window.setTimeout(() => {
+      const body = this.pendingPrefs;
+      this.pendingPrefs = {};
+      this.prefsTimer = null;
+      api.patch<ViewPrefs>('/api/prefs', body).catch(() => {
+        // Offline: the local value stands until the next snapshot corrects it.
+      });
+    }, PREFS_FLUSH_MS);
   }
 
   private reconnectNow(): void {
@@ -176,7 +230,10 @@ class StateStore {
       case 'snapshot':
         saveCache(msg.state);
         this.set({
-          state: msg.state,
+          state: {
+            ...msg.state,
+            prefs: mergePrefs(DEFAULT_PREFS, msg.state.prefs, this.pendingPrefs),
+          },
           link: 'live',
           lastMessageAt: now,
           events: mergeEvents(this.snapshot.events, msg.state.recentEvents),
@@ -191,6 +248,8 @@ class StateStore {
         if (msg.source) next.source = msg.source;
         if (msg.time) next.time = msg.time;
         if (msg.health) next.health = msg.health;
+        // Do not let a server echo undo a change still waiting to be sent.
+        if (msg.prefs) next.prefs = mergePrefs(msg.prefs, this.pendingPrefs);
         if (msg.ais) {
           const byMmsi = new Map(prev.ais.map((t) => [t.mmsi, t]));
           for (const t of msg.ais.upsert ?? []) byMmsi.set(t.mmsi, t);
@@ -235,7 +294,10 @@ function mergeEvents(existing: EventRecord[], incoming: EventRecord[]): EventRec
 function loadCache(): FullState | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as FullState) : null;
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as FullState;
+    // A cache written before prefs existed has none.
+    return { ...cached, prefs: mergePrefs(DEFAULT_PREFS, cached.prefs) };
   } catch {
     return null;
   }
@@ -280,4 +342,10 @@ export const store = new StateStore();
 
 export function useStore(): StoreSnapshot {
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** The shared view preferences and a setter that persists them on the boat. */
+export function usePrefs(): [ViewPrefs, (patch: ViewPrefsPatch) => void] {
+  const { state } = useStore();
+  return [state?.prefs ?? DEFAULT_PREFS, (patch) => store.patchPrefs(patch)];
 }

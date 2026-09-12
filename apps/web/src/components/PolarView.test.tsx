@@ -69,7 +69,9 @@ describe('PolarView', () => {
     expect(html).toContain('Reef');
     expect(html).toContain('WANDERER');
     expect(html).toContain('data-state="SET"');
-    expect(html).toMatch(/aria-label="Anchor view\. Swing radius 48 m\. Boat 30 m from anchor\."/);
+    expect(html).toMatch(/aria-label="Anchor view. Alarm radius 48 m. Boat 30 m from anchor."/);
+    expect(html).toContain('alarm <!-- -->48.0 m');
+    expect(html).toContain('warning <!-- -->38.0 m');
   });
 
   it('renders a position-only view with no session, in feet', () => {
@@ -91,5 +93,120 @@ describe('PolarView', () => {
     expect(html).not.toContain('class="swing"');
     expect(html).toContain('ft');
     expect(html).toContain('position stale');
+  });
+});
+
+describe('PolarView additions', () => {
+  const base = {
+    state: 'SET' as const,
+    anchor: A,
+    swingRadius: 48,
+    warnRadius: 38,
+    boat: destination(A, degToRad(45), 30),
+    positionStale: false,
+    track: [],
+    zones: [],
+    ais: [],
+    units: DEFAULT_UNITS,
+  };
+
+  it('draws the apparent wind arrow at heading + AWA and the readouts', () => {
+    const html = renderToString(
+      <PolarView
+        {...base}
+        headingRad={degToRad(90)}
+        wind={{ awa: degToRad(30), aws: 6, stale: false }}
+        depth={{ value: 5.2, stale: false }}
+      />,
+    );
+    // Wind from 120° true: the arrow group is rotated by that much.
+    expect(html).toMatch(/class="wind" transform="rotate\(120\.0 300 300\)"/);
+    expect(html).toContain('wind <!-- -->30° S');
+    expect(html).toContain('11.7'); // 6 m/s in knots
+    expect(html).toContain('depth');
+    expect(html).toContain('5.2');
+  });
+
+  it('cannot place the arrow without a heading and says so', () => {
+    const html = renderToString(
+      <PolarView {...base} headingRad={null} wind={{ awa: 0.5, aws: 4, stale: false }} />,
+    );
+    expect(html).not.toContain('class="wind"');
+    expect(html).toContain('no heading');
+  });
+
+  it('shows the previous anchor greyed and labels a manual circle', () => {
+    const html = renderToString(
+      <PolarView
+        {...base}
+        headingRad={null}
+        manualRadius
+        previousAnchor={{ anchor: destination(A, 0, 80), swingRadius: 40, endedAt: 1 }}
+      />,
+    );
+    expect(html).toContain('previous anchor');
+    expect(html).toContain('class="prev-swing"');
+    expect(html).toContain('alarm <!-- -->48.0 m<!-- --> · manual');
+  });
+
+  it('lays imagery tiles under the rose from the tile API', () => {
+    const html = renderToString(
+      <PolarView
+        {...base}
+        headingRad={null}
+        imagery={{ id: 'sat', minZoom: 0, maxZoom: 19 }}
+        pixelWidth={600}
+      />,
+    );
+    expect(html).toContain('clip-path="url(#polar-rose-clip)"');
+    expect(html).toMatch(/href="\/api\/tiles\/sat\/1[6-9]\/\d+\/\d+"/);
+    expect(html).toMatch(/imagery z<!-- -->1[6-9]/);
+  });
+
+  it('widens the view to fit AIS targets when asked', () => {
+    const far = destination(A, degToRad(200), 900);
+    const target = {
+      mmsi: '2',
+      own: false,
+      class: 'B' as const,
+      name: null,
+      callsign: null,
+      shipType: null,
+      navStatus: null,
+      lat: far.lat,
+      lon: far.lon,
+      sog: null,
+      cog: null,
+      heading: null,
+      length: null,
+      beam: null,
+      lastSeen: 0,
+      lastPositionAt: null,
+      range: 900,
+      bearing: 0,
+      cpa: null,
+      tcpa: null,
+    };
+    const tight = renderToString(<PolarView {...base} headingRad={null} ais={[target]} showAis />);
+    const wide = renderToString(
+      <PolarView {...base} headingRad={null} ais={[target]} showAis fitAis />,
+    );
+    expect(tight).not.toContain('>2<');
+    expect(wide).toContain('>2<');
+    expect(wide).toContain('rings <!-- -->500 m');
+  });
+
+  it('lets the page scroll unless a drag mode is on', () => {
+    const plain = renderToString(<PolarView {...base} headingRad={null} />);
+    expect(plain).toContain('touch-action:pan-y');
+    const editing = renderToString(
+      <PolarView
+        {...base}
+        headingRad={null}
+        editRadius={{ onDrag: () => undefined, onCommit: () => undefined }}
+      />,
+    );
+    expect(editing).toContain('touch-action:none');
+    expect(editing).toContain('drag a ring to resize');
   });
 });

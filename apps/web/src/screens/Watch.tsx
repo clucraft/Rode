@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ActiveCondition, LatLon, WatchStateName } from '@rode/core';
+import { effectiveRadii, type ActiveCondition, type LatLon, type WatchStateName } from '@rode/core';
 import type { TrackPoint, Units, ZoneRecord } from '@rode/protocol';
+import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client.js';
-import { useStore } from '../api/store.js';
+import { usePrefs, useStore } from '../api/store.js';
 import { useAuth } from '../api/auth.js';
 import { armAudio, disarmAudio, setAlarmLevel, useAudio } from '../lib/audio.js';
 import {
@@ -19,12 +20,15 @@ import {
   fmtTemp,
   fmtVoltage,
   fmtWatts,
+  fromSiDistance,
+  toSiDistance,
 } from '../lib/format.js';
-import { useLocal } from '../lib/useLocal.js';
 import { useWakeLock } from '../lib/wakelock.js';
 import { ConfirmDialog, Dialog, Readout } from '../components/common.js';
 import { PolarView } from '../components/PolarView.jsx';
 import { ChartView } from '../components/ChartView.jsx';
+import { ImageryPicker, useImagerySources } from '../components/ImageryPicker.jsx';
+import { ZoneEditor } from './SettingsAdmin.jsx';
 import { useTheme } from '../lib/theme.js';
 
 /*
@@ -65,7 +69,10 @@ export function Watch() {
   const { state, link, clockOffsetMs } = useStore();
   const { settings, user, config } = useAuth();
   const theme = useTheme();
-  const [viewMode, setViewMode] = useLocal<'polar' | 'chart'>('rode:watch-view', 'polar');
+  const [prefs, setPrefs] = usePrefs();
+  const viewMode = prefs.watchView;
+  const showAis = prefs.showAis;
+  const trackHours = prefs.trackHours;
   const [chartProblem, setChartProblem] = useState<string | null>(null);
   const chartAvailable = Boolean(config?.tilesUrl) && chartProblem === null;
   const audio = useAudio();
@@ -75,10 +82,12 @@ export function Watch() {
   const [depthPrompt, setDepthPrompt] = useState(false);
   const [tidePrompt, setTidePrompt] = useState(false);
   const [nudge, setNudge] = useState(false);
-  const [showAis, setShowAis] = useLocal('rode:watch-ais', true);
-  const [trackHours, setTrackHours] = useLocal('rode:track-hours', 6);
+  const [editRadius, setEditRadius] = useState(false);
+  const [zoneEditor, setZoneEditor] = useState(false);
   const [zones, setZones] = useState<ZoneRecord[]>([]);
+  const [zonesTick, setZonesTick] = useState(0);
   const [track, setTrack] = useState<TrackPoint[]>([]);
+  const imagerySources = useImagerySources();
 
   const wakeLocked = useWakeLock(true);
   const watch = state?.watch ?? null;
@@ -87,6 +96,10 @@ export function Watch() {
   const geometry = session?.geometry ?? null;
   const instruments = state?.instruments ?? {};
   const serverNow = Date.now() + clockOffsetMs;
+  const alarmCfg = {
+    marinaRadius: settings?.alarm.marinaRadius ?? 30,
+    warnDistance: settings?.alarm.warnDistance ?? 10,
+  };
 
   // Alarm audio follows the server's state; snoozing silences it.
   useEffect(() => {
@@ -107,7 +120,7 @@ export function Watch() {
     return () => {
       cancelled = true;
     };
-  }, [session?.id]);
+  }, [session?.id, zonesTick]);
 
   // Track history: fetch on session/hours change, then append live positions.
   useEffect(() => {
@@ -171,20 +184,68 @@ export function Watch() {
     [watch],
   );
 
-  const centre = session?.mode === 'marina' ? session.marinaCentre : (session?.anchor ?? null);
-  const radius =
-    session?.mode === 'marina' ? session.marinaRadius : (geometry?.swingRadius ?? null);
-  const warnRadius =
-    session?.mode === 'marina'
-      ? session.marinaRadius !== null && settings
-        ? Math.max(0, session.marinaRadius - (settings.alarm.warnDistance ?? 10))
-        : null
-      : (geometry?.warnRadius ?? null);
+  const phase = watch?.phase ?? 'IDLE';
+  // An ended session stays on the state until the next drop: that is the
+  // "previous anchor" shown greyed after weighing.
+  const active = phase !== 'IDLE' ? session : null;
+  const centre = active?.mode === 'marina' ? active.marinaCentre : (active?.anchor ?? null);
+  const radii = effectiveRadii(active, alarmCfg);
+  const radius = radii?.swingRadius ?? null;
+  const warnRadius = radii?.warnRadius ?? null;
+  const previousAnchor =
+    prefs.showPreviousAnchor && phase === 'IDLE' && session?.anchor
+      ? {
+          anchor: session.anchor,
+          swingRadius: session.radiusOverride?.swingRadius ?? session.geometry?.swingRadius ?? null,
+          endedAt: session.endedAt,
+        }
+      : null;
   const hasFix = Boolean(boat) && (watch?.live.positionAgeS ?? 999) < 10;
   const positionStale = !hasFix;
   const canAct = user?.role === 'admin' || user?.role === 'crew';
-  const phase = watch?.phase ?? 'IDLE';
+  const isAdmin = user?.role === 'admin';
   const offline = link !== 'live';
+  const imagery = useMemo(() => {
+    const src = imagerySources.find((s) => s.id === prefs.imagerySource && s.enabled);
+    return src ? { id: src.id, minZoom: src.minZoom, maxZoom: src.maxZoom } : null;
+  }, [imagerySources, prefs.imagerySource]);
+  const wind = instruments.awa
+    ? {
+        awa: instruments.awa.value,
+        aws: instruments.aws?.value ?? null,
+        stale: instruments.awa.stale || (instruments.aws?.stale ?? true),
+      }
+    : undefined;
+  const depth = instruments.depth
+    ? { value: instruments.depth.value, stale: instruments.depth.stale }
+    : undefined;
+
+  // Live preview while a ring is dragged; the server is the truth on release.
+  const [radiusDraft, setRadiusDraft] = useState<{ swing: number; warn: number } | null>(null);
+  const independent = session?.radiusOverride?.mode === 'independent';
+  const [independentDraft, setIndependentDraft] = useState<boolean | null>(null);
+  const independentMode = independentDraft ?? independent;
+  const linkedPair = useCallback(
+    (which: 'swing' | 'warn', metres: number): { swing: number; warn: number } => {
+      if (independentMode) {
+        return which === 'swing'
+          ? { swing: metres, warn: Math.min(metres, warnRadius ?? 0) }
+          : { swing: Math.max(metres, radius ?? 0), warn: metres };
+      }
+      const swing = which === 'swing' ? metres : metres + alarmCfg.warnDistance;
+      return { swing, warn: Math.max(0, swing - alarmCfg.warnDistance) };
+    },
+    [independentMode, warnRadius, radius, alarmCfg.warnDistance],
+  );
+  const commitRadius = useCallback(
+    async (which: 'swing' | 'warn', metres: number) => {
+      setRadiusDraft(null);
+      const body: Record<string, unknown> = { mode: independentMode ? 'independent' : 'linked' };
+      body[which === 'swing' ? 'swingRadius' : 'warnRadius'] = metres;
+      return command('/api/anchor/radius', body);
+    },
+    [independentMode, command],
+  );
 
   const bannerDetail = (): string => {
     if (offline) return 'No connection to the boat. Showing the last known state.';
@@ -270,8 +331,9 @@ export function Watch() {
         <PolarView
           state={stateName}
           anchor={centre}
-          swingRadius={radius}
-          warnRadius={warnRadius}
+          swingRadius={radiusDraft?.swing ?? radius}
+          warnRadius={radiusDraft?.warn ?? warnRadius}
+          manualRadius={radii?.manual ?? false}
           boat={boat}
           headingRad={
             instruments.heading && !instruments.heading.stale ? instruments.heading.value : null
@@ -281,10 +343,23 @@ export function Watch() {
           zones={zones}
           ais={state?.ais ?? []}
           units={units}
-          setPosition={session?.setPosition ?? null}
+          setPosition={active?.setPosition ?? null}
           nudgeMode={nudge && phase === 'SET'}
           onNudge={onNudge}
           showAis={showAis}
+          wind={wind}
+          depth={depth}
+          previousAnchor={previousAnchor}
+          imagery={imagery}
+          night={theme.theme === 'night'}
+          editRadius={
+            editRadius && (phase === 'SET' || phase === 'MARINA')
+              ? {
+                  onDrag: (which, m) => setRadiusDraft(linkedPair(which, m)),
+                  onCommit: (which, m) => void commitRadius(which, m),
+                }
+              : undefined
+          }
         />
       )}
 
@@ -297,14 +372,23 @@ export function Watch() {
           max={48}
           step={1}
           value={trackHours}
-          onChange={(e) => setTrackHours(Number(e.target.value))}
-          aria-valuetext={`${trackHours} hours`}
+          onChange={(e) => setPrefs({ trackHours: Number(e.target.value) })}
+          aria-valuetext={`${String(trackHours)} hours`}
         />
         <span className="num">{trackHours} h</span>
         <label className="checkbox small" style={{ minHeight: 0 }}>
-          <input type="checkbox" checked={showAis} onChange={(e) => setShowAis(e.target.checked)} />{' '}
+          <input
+            type="checkbox"
+            checked={showAis}
+            onChange={(e) => setPrefs({ showAis: e.target.checked })}
+          />{' '}
           AIS
         </label>
+        <ImageryPicker
+          sources={imagerySources}
+          value={prefs.imagerySource}
+          onChange={(id) => setPrefs({ imagerySource: id })}
+        />
         {config?.tilesUrl ? (
           <button
             type="button"
@@ -312,12 +396,50 @@ export function Watch() {
             aria-pressed={viewMode === 'chart'}
             disabled={chartProblem !== null}
             title={chartProblem ? `Chart unavailable: ${chartProblem}` : undefined}
-            onClick={() => setViewMode(viewMode === 'chart' ? 'polar' : 'chart')}
+            onClick={() => setPrefs({ watchView: viewMode === 'chart' ? 'polar' : 'chart' })}
           >
             {viewMode === 'chart' && chartAvailable ? 'Polar view' : 'Chart'}
           </button>
         ) : null}
       </div>
+
+      {editRadius && (phase === 'SET' || phase === 'MARINA') ? (
+        <RadiusEditor
+          units={units}
+          swing={radiusDraft?.swing ?? radius}
+          warn={radiusDraft?.warn ?? warnRadius}
+          manual={radii?.manual ?? false}
+          computed={active ? effectiveRadii({ ...active, radiusOverride: null }, alarmCfg) : null}
+          independent={independentMode}
+          warnDistance={alarmCfg.warnDistance}
+          onIndependent={(v) => setIndependentDraft(v)}
+          onApply={async (swing, warn) => {
+            setRadiusDraft(null);
+            return command('/api/anchor/radius', {
+              swingRadius: swing,
+              warnRadius: warn,
+              mode: independentMode ? 'independent' : 'linked',
+            });
+          }}
+          onReset={async () => {
+            setRadiusDraft(null);
+            setIndependentDraft(null);
+            setError(null);
+            try {
+              await api.delete('/api/anchor/radius');
+              return true;
+            } catch (e) {
+              setError(errorMessage(e));
+              return false;
+            }
+          }}
+          onClose={() => {
+            setEditRadius(false);
+            setRadiusDraft(null);
+            setIndependentDraft(null);
+          }}
+        />
+      ) : null}
 
       <section className="hero-row">
         {phase === 'IDLE' ? (
@@ -354,7 +476,22 @@ export function Watch() {
               value={fmtDistance(watch?.live.distanceToEdge, units)}
               stale={positionStale}
             />
-            <Readout label="Radius" value={fmtDistance(radius, units)} />
+            <Readout
+              label="Alarm radius"
+              value={fmtDistance(radius, units)}
+              sub={radii?.manual ? 'set by hand' : undefined}
+            />
+            <Readout
+              label="Warning radius"
+              value={fmtDistance(warnRadius, units)}
+              sub={
+                radii?.manual
+                  ? session?.radiusOverride?.mode === 'independent'
+                    ? 'independent'
+                    : 'linked'
+                  : `${fmtDistance(alarmCfg.warnDistance, units).value} ${fmtDistance(alarmCfg.warnDistance, units).unit} inside`
+              }
+            />
             {session?.mode === 'marina' ? (
               <>
                 <Readout
@@ -548,6 +685,18 @@ export function Watch() {
               ) : null}
               <button
                 type="button"
+                className={`btn ${editRadius ? 'primary' : ''}`}
+                disabled={!canAct || offline}
+                aria-pressed={editRadius}
+                onClick={() => {
+                  setEditRadius((e) => !e);
+                  setNudge(false);
+                }}
+              >
+                {editRadius ? 'Done editing radius' : 'Edit alarm radius'}
+              </button>
+              <button
+                type="button"
                 className="btn"
                 disabled={!canAct || offline}
                 onClick={() => setConfirmWeigh(true)}
@@ -557,7 +706,39 @@ export function Watch() {
             </div>
           </>
         ) : null}
+
+        <div className="btn-row zone-row">
+          <button
+            type="button"
+            className="btn"
+            disabled={!canAct || offline || !isAdmin}
+            title={isAdmin ? undefined : 'Admins can add zones'}
+            onClick={() => setZoneEditor(true)}
+          >
+            Add exclusion zone
+          </button>
+          <span className="small muted">
+            {zones.filter((z) => z.enabled).length === 0
+              ? 'No zones.'
+              : `${String(zones.filter((z) => z.enabled).length)} active zone${zones.filter((z) => z.enabled).length === 1 ? '' : 's'}: ${zones
+                  .filter((z) => z.enabled)
+                  .map((z) => z.name)
+                  .join(', ')}.`}{' '}
+            <Link to="/settings/zones">Manage</Link>
+          </span>
+        </div>
       </section>
+
+      {zoneEditor ? (
+        <ZoneEditor
+          zone={null}
+          onClose={() => setZoneEditor(false)}
+          onSaved={() => {
+            setZoneEditor(false);
+            setZonesTick((n) => n + 1);
+          }}
+        />
+      ) : null}
 
       {confirmWeigh ? (
         <ConfirmDialog
@@ -778,5 +959,132 @@ function TideDialog(p: {
         />
       </div>
     </Dialog>
+  );
+}
+
+/**
+ * Manual circle. Two fields in display units, a checkbox that unlinks them,
+ * and a way back to the computed circle. Dragging the rings on the view
+ * writes into the same fields.
+ */
+function RadiusEditor(p: {
+  units: Units;
+  swing: number | null;
+  warn: number | null;
+  manual: boolean;
+  computed: { swingRadius: number; warnRadius: number } | null;
+  independent: boolean;
+  warnDistance: number;
+  onIndependent: (v: boolean) => void;
+  onApply: (swingM: number, warnM: number) => Promise<boolean>;
+  onReset: () => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const show = (m: number | null) =>
+    m === null ? '' : String(Math.round(fromSiDistance(m, p.units) * 10) / 10);
+  const [swingText, setSwingText] = useState(show(p.swing));
+  const [warnText, setWarnText] = useState(show(p.warn));
+  const [err, setErr] = useState<string | null>(null);
+  // Follow the rings while they are dragged.
+  useEffect(() => {
+    setSwingText(show(p.swing));
+    setWarnText(show(p.warn));
+  }, [p.swing, p.warn, p.units]);
+  const unit = p.units.distance;
+  const parse = (t: string) => {
+    const n = Number(t);
+    return Number.isFinite(n) ? toSiDistance(n, p.units) : NaN;
+  };
+  const onSwing = (t: string) => {
+    setSwingText(t);
+    if (!p.independent) {
+      const m = parse(t);
+      if (Number.isFinite(m)) setWarnText(show(Math.max(0, m - p.warnDistance)));
+    }
+  };
+  const onWarn = (t: string) => {
+    setWarnText(t);
+    if (!p.independent) {
+      const m = parse(t);
+      if (Number.isFinite(m)) setSwingText(show(m + p.warnDistance));
+    }
+  };
+  return (
+    <section className="radius-editor" aria-label="Edit alarm radius">
+      <div className="row">
+        <div className="field">
+          <label htmlFor="r-swing">Alarm radius ({unit})</label>
+          <input
+            id="r-swing"
+            type="number"
+            inputMode="decimal"
+            step="1"
+            min="0"
+            value={swingText}
+            onChange={(e) => onSwing(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="r-warn">Warning radius ({unit})</label>
+          <input
+            id="r-warn"
+            type="number"
+            inputMode="decimal"
+            step="1"
+            min="0"
+            value={warnText}
+            onChange={(e) => onWarn(e.target.value)}
+          />
+        </div>
+      </div>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={p.independent}
+          onChange={(e) => p.onIndependent(e.target.checked)}
+        />{' '}
+        Ignore configured radius scale
+        <span className="small muted">
+          {' '}
+          — unchecked, the warning ring stays {fmtDistance(p.warnDistance, p.units).value}{' '}
+          {fmtDistance(p.warnDistance, p.units).unit} inside the alarm ring (the Settings value) and
+          either field moves the other; checked, each is set on its own.
+        </span>
+      </label>
+      {err ? <p className="error">{err}</p> : null}
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn primary"
+          onClick={async () => {
+            setErr(null);
+            const s = parse(swingText);
+            const w = parse(warnText);
+            if (!Number.isFinite(s) || !Number.isFinite(w)) {
+              setErr('Enter both radii as numbers.');
+              return;
+            }
+            if (w > s) {
+              setErr('The warning radius must be inside the alarm radius.');
+              return;
+            }
+            await p.onApply(s, w);
+          }}
+        >
+          Apply
+        </button>
+        {p.manual ? (
+          <button type="button" className="btn" onClick={() => void p.onReset()}>
+            Reset to computed
+            {p.computed
+              ? ` (${fmtDistance(p.computed.swingRadius, p.units).value} ${fmtDistance(p.computed.swingRadius, p.units).unit})`
+              : ''}
+          </button>
+        ) : null}
+        <button type="button" className="btn quiet" onClick={p.onClose}>
+          Done
+        </button>
+      </div>
+    </section>
   );
 }

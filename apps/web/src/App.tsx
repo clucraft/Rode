@@ -20,6 +20,7 @@ import {
 } from './screens/Settings.jsx';
 import { Diagnostics, Security, Tokens, Users, Zones } from './screens/SettingsAdmin.jsx';
 import { Notifications } from './screens/Notifications.jsx';
+import { Imagery } from './screens/Imagery.jsx';
 
 /*
  * Routing and the auth gate. Order of gates: setup wizard (no admin yet) →
@@ -66,6 +67,7 @@ export function App() {
             <Route path="source" element={<Source />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="zones" element={<Zones />} />
+            <Route path="imagery" element={<Imagery />} />
             <Route path="users" element={<Users />} />
             <Route path="security" element={<Security />} />
             <Route path="tokens" element={<Tokens />} />

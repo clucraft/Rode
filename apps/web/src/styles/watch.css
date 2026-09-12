@@ -8,6 +8,10 @@
   display: grid;
   gap: 0.8rem;
 }
+/* A wide control row must wrap, never push the column (and the polar view) past the phone's edge. */
+.watch > * {
+  min-width: 0;
+}
 
 /* ---------------------------------------------------------------- state banner */
 
@@ -98,8 +102,76 @@
   width: 100%;
   height: 100%;
   display: block;
-  touch-action: none;
+  /* touch-action is set inline: pan-y normally, none while dragging something. */
   user-select: none;
+}
+/* imagery under the rose */
+.polar .imagery-bg {
+  fill: var(--surface-2);
+}
+.polar .imagery image {
+  opacity: 0.92;
+}
+.polar.night .imagery image {
+  filter: sepia(1) hue-rotate(-50deg) saturate(3) brightness(0.35);
+}
+/* text over imagery needs a halo */
+.polar .ring-label,
+.polar .radius-label,
+.polar .ais-label,
+.polar .prev-label,
+.polar .compass text,
+.polar .north text {
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.polar .radius-label {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  fill: var(--fg);
+}
+.polar .radius-label.warn {
+  fill: var(--warn);
+}
+.polar .swing.dragging,
+.polar .warn-ring.dragging {
+  stroke-width: 4;
+}
+.polar .edit-handles circle {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.polar .wind path {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+.polar .wind-stem {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.polar .wind.stale {
+  opacity: 0.35;
+}
+.polar .previous {
+  opacity: 0.55;
+}
+.polar .prev-anchor {
+  stroke: var(--muted);
+}
+.polar .prev-swing {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 6;
+}
+.polar .prev-label {
+  fill: var(--muted);
+  font-size: 10px;
 }
 .polar .ring {
   fill: none;
@@ -215,6 +287,46 @@
   font-weight: 600;
   color: var(--fg-2);
 }
+.polar-readouts {
+  position: absolute;
+  right: 0.4rem;
+  top: calc(0.4rem + 86px);
+  display: grid;
+  gap: 0.3rem;
+  text-align: right;
+}
+.polar-readouts .pr {
+  background: var(--surface);
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0.25rem 0.5rem;
+  display: grid;
+  line-height: 1.1;
+  min-width: 76px;
+}
+.polar-readouts .pr.stale {
+  opacity: 0.5;
+}
+.polar-readouts .pr-label {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.polar-readouts .pr-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+.polar-readouts .pr-unit {
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-left: 0.2rem;
+  color: var(--fg-2);
+}
+.polar-readouts .pr-note {
+  font-size: 0.65rem;
+  color: var(--warn);
+}
 .polar-controls {
   position: absolute;
   right: 0.4rem;
@@ -299,12 +411,14 @@
 .track-range {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
   font-size: 0.85rem;
   color: var(--muted);
 }
 .track-range input[type='range'] {
-  flex: 1;
+  flex: 1 1 120px;
+  min-width: 0;
   min-height: 32px;
 }
 
@@ -363,4 +477,61 @@
   background: transparent;
   color: var(--fg);
   border-color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- radius editor, zones */
+
+.radius-editor {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.radius-editor .row {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+.radius-editor .row .field {
+  flex: 1 1 140px;
+}
+.zone-row {
+  align-items: center;
+}
+.zone-row > .btn {
+  flex: 0 0 auto;
+}
+.imagery-pick select {
+  min-height: 32px;
+  max-width: 11rem;
+}
+
+/* ---------------------------------------------------------------- imagery settings */
+
+.imagery-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: grid;
+  gap: 0.8rem;
+}
+.imagery-item {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.imagery-item .row {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.imagery-item .row .field {
+  flex: 1 1 120px;
+  margin: 0;
 }

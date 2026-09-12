@@ -3,6 +3,7 @@ import { knotsToMps } from '@rode/core';
 import {
   DEFAULT_UNITS,
   fmtBearing,
+  fmtRange,
   fmtDepth,
   fmtDistance,
   fmtDuration,
@@ -89,5 +90,16 @@ describe('night window', () => {
   it('handles a same-day window', () => {
     expect(inNightWindow(at(2), '01:00', '05:00')).toBe(true);
     expect(inNightWindow(at(7), '01:00', '05:00')).toBe(false);
+  });
+});
+
+describe('fmtRange', () => {
+  it('switches to nautical miles beyond 1000 ft or 1000 m', () => {
+    const ft = { ...DEFAULT_UNITS, distance: 'ft' as const };
+    expect(fmtRange(300, ft)).toMatchObject({ value: '984', unit: 'ft' });
+    expect(fmtRange(400, ft)).toMatchObject({ value: '0.22', unit: 'nm' });
+    expect(fmtRange(900, DEFAULT_UNITS)).toMatchObject({ value: '900', unit: 'm' });
+    expect(fmtRange(1852 * 12, DEFAULT_UNITS)).toMatchObject({ value: '12.0', unit: 'nm' });
+    expect(fmtRange(null, ft).value).toBe('—');
   });
 });

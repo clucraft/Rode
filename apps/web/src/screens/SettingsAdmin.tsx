@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import type { ZoneInput, ZoneRecord } from '@rode/protocol';
 import { api, errorMessage } from '../api/client.js';
 import { refreshAuth, useAuth } from '../api/auth.js';
-import { useStore } from '../api/store.js';
+import { usePrefs, useStore } from '../api/store.js';
+import { useImagerySources } from '../components/ImageryPicker.jsx';
 import { fmtDateTime, fmtDuration, fmtLatLon } from '../lib/format.js';
 import { ConfirmDialog, Dialog } from '../components/common.js';
 import { PolarView } from '../components/PolarView.jsx';
@@ -69,8 +70,15 @@ export function Zones() {
   );
 }
 
-function ZoneEditor(p: { zone: ZoneRecord | null; onClose: () => void; onSaved: () => void }) {
+export function ZoneEditor(p: {
+  zone: ZoneRecord | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { state } = useStore();
+  const [prefs] = usePrefs();
+  const imagerySources = useImagerySources();
+  const imagerySrc = imagerySources.find((s) => s.id === prefs.imagerySource && s.enabled);
   const [name, setName] = useState(p.zone?.name ?? '');
   const [kind, setKind] = useState<ZoneInput['kind']>(p.zone?.kind ?? 'never-enter');
   const [enabled, setEnabled] = useState(p.zone?.enabled ?? true);
@@ -194,6 +202,11 @@ function ZoneEditor(p: { zone: ZoneRecord | null; onClose: () => void; onSaved: 
           ais={[]}
           units={settings?.units ?? DEFAULT_UNITS}
           drawing={drawn}
+          imagery={
+            imagerySrc
+              ? { id: imagerySrc.id, minZoom: imagerySrc.minZoom, maxZoom: imagerySrc.maxZoom }
+              : null
+          }
           onTap={(pos) =>
             setPoints((ps) => {
               const next = { lat: pos.lat.toFixed(6), lon: pos.lon.toFixed(6) };

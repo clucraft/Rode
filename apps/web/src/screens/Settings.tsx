@@ -61,6 +61,7 @@ export function SettingsIndex() {
       admin: true,
     },
     { to: 'zones', label: 'Exclusion zones', sub: 'Reefs, cables, fairways', admin: true },
+    { to: 'imagery', label: 'Imagery', sub: 'Satellite background: MBTiles files or online tiles' },
     { to: 'users', label: 'Users', sub: 'Admins and crew', admin: true },
     { to: 'security', label: 'Your account', sub: 'Password, two-factor, signed-in devices' },
     {

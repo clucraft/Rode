@@ -234,3 +234,19 @@ export function speedUnitLabel(units: Units): string {
 export function distanceUnitLabel(units: Units): string {
   return units.distance;
 }
+
+const NM_M = 1852;
+
+/**
+ * Range to another vessel: the configured distance unit close in, nautical
+ * miles once it stops being a number anyone thinks in (over 1000 ft, or
+ * 1000 m for metric boats).
+ */
+export function fmtRange(m: number | null | undefined, units: Units): Formatted {
+  if (m === null || m === undefined || !Number.isFinite(m)) return DASH;
+  const limit = units.distance === 'ft' ? 1000 * 0.3048 : 1000;
+  if (m <= limit) return fmtDistance(m, units, 0);
+  const nm = m / NM_M;
+  const d = nm >= 10 ? 1 : 2;
+  return { value: fixed(nm, d), unit: 'nm', label: `${fixed(nm, d)} nautical miles` };
+}
