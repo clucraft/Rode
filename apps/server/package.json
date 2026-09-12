@@ -12,6 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/static": "^10.1.3",
+    "@fastify/websocket": "^11.3.0",
     "@rode/core": "workspace:*",
     "@rode/ingest": "workspace:*",
     "@rode/protocol": "workspace:*",
@@ -19,6 +23,7 @@
     "@zxcvbn-ts/language-common": "^4.1.3",
     "@zxcvbn-ts/language-en": "^4.1.1",
     "argon2": "^0.45.1",
+    "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.4",
     "ggencoder": "1.0.11",
     "mqtt": "^5.15.2",
