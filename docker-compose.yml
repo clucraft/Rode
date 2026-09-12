@@ -42,11 +42,32 @@ services:
     cap_drop:
       - ALL
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/readyz']
+      test: ['CMD', 'node', 'dist/healthcheck.js']
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
+    logging: *logging
+
+  # Optional TLS termination. Two ways to get a certificate offline-friendly:
+  #   1. Tailscale: run `tailscale cert <name>.<tailnet>.ts.net` on the host and
+  #      point Caddyfile at the files (see docker/caddy/Caddyfile).
+  #   2. Let's Encrypt via DNS challenge if the box has internet at the dock.
+  # Set RODE_TLS=true in .env when this profile is on so cookies get Secure.
+  caddy:
+    profiles: ['tls']
+    image: caddy:2.10.0
+    container_name: rode-caddy
+    restart: unless-stopped
+    ports:
+      - '443:443'
+      - '80:80'
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/caddy/certs:/certs:ro
+      - rode-caddy:/data
+    depends_on:
+      - rode
     logging: *logging
 
   tiles:
@@ -84,3 +105,4 @@ volumes:
   # Drop .mbtiles files here (see README → Offline charts).
   rode-tiles:
   rode-mqtt:
+  rode-caddy:

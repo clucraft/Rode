@@ -1088,6 +1088,16 @@ export function Diagnostics() {
         </ul>
       </section>
       <p className="small muted">Boat position: {fmtLatLon(state?.watch.live.boat ?? null)}</p>
+      <section className="section">
+        <h2>Backup</h2>
+        <p className="small muted">
+          A consistent snapshot of the whole database, taken while the watch keeps running. It
+          contains the settings table, including notification tokens: keep it somewhere private.
+        </p>
+        <a className="btn" href="/api/admin/backup" download>
+          Download backup
+        </a>
+      </section>
     </Panel>
   );
 }

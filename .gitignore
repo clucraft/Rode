@@ -33,3 +33,5 @@ coverage/
 
 # logs
 *.log
+docker/caddy/certs/*
+!docker/caddy/certs/.gitkeep

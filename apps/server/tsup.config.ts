@@ -5,7 +5,7 @@ import { defineConfig } from 'tsup';
 // `pnpm deploy` in the Docker build. Bundling third-party CommonJS into ESM
 // breaks on dynamic requires, so we do not try.
 export default defineConfig({
-  entry: { index: 'src/index.ts' },
+  entry: { index: 'src/index.ts', healthcheck: 'src/healthcheck.ts', backup: 'src/backup.ts' },
   format: ['esm'],
   target: 'node22',
   platform: 'node',

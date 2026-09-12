@@ -345,3 +345,26 @@ Three rules fit in sixty lines: hashed assets cache-first, the shell
 network-first with cache fallback, `/api` and `/ws` untouched. Workbox would
 add a build step and a dependency to do the same. The worker registers only
 in production builds so development never serves a stale bundle.
+
+## 10.1 — Debian slim, not Alpine, for the runtime image
+
+`better-sqlite3` and `argon2` publish prebuilt binaries for glibc on
+amd64 and arm64. On Alpine (musl) the arm64 build compiles both under QEMU,
+which takes ten-plus minutes and fails on the first toolchain hiccup. The
+image is ~50 MB larger; the build is reliable. The base image is pinned by
+its multi-arch index digest and bumped deliberately.
+
+## 10.2 — Backups are `VACUUM INTO`, available from the phone
+
+`make backup` runs `node dist/backup.js` inside the container and copies
+the result out; Settings › Diagnostics has a download link that does the
+same over HTTPS. Both produce a compact, consistent copy while the server
+is writing. `cp rode.db` also works with WAL, but a copy taken mid-checkpoint
+can need the `-wal` file next to it; `VACUUM INTO` never does.
+
+## 10.3 — Healthcheck is a 400-byte node script
+
+Debian slim has neither `wget` nor `curl`. Installing one adds packages to
+a read-only image for one probe; spawning node every 30 s costs a few
+milliseconds of CPU on a Pi 5. The script hits `/readyz`, so a wedged engine
+fails the check.

@@ -3,10 +3,15 @@
 # Rode — single runtime image containing the API server, the alarm engine,
 # the ingest module and the built web app. Multi-arch (amd64 + arm64).
 #
-# Build:   docker buildx build -f docker/server.Dockerfile -t rode .
-# Digests: the base image tag is pinned by digest in phase 10 (docs/decisions.md).
+# Base image is Debian slim rather than Alpine: better-sqlite3 and argon2
+# ship prebuilt binaries for glibc on both architectures, so the arm64 build
+# does not compile native code under QEMU. Pinned by the multi-arch index
+# digest; bump deliberately.
+#
+# Build (local):  docker buildx build -f docker/server.Dockerfile -t rode .
+# Build (multi):  docker buildx build --platform linux/amd64,linux/arm64 -f docker/server.Dockerfile -t ghcr.io/clucraft/rode:dev .
 
-ARG NODE_IMAGE=node:22-alpine
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
 ARG PNPM_VERSION=10.28.1
 
 # ---------------------------------------------------------------- base
@@ -20,9 +25,12 @@ WORKDIR /app
 
 # ---------------------------------------------------------------- deps
 # Only manifests are copied here so the dependency layer is cached until a
-# package.json or the lockfile actually changes.
+# package.json or the lockfile actually changes. The toolchain is a fallback
+# for the rare platform without a prebuilt native binary.
 FROM base AS deps
-RUN apk add --no-cache python3 make g++
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/ingest/package.json apps/ingest/
 COPY apps/server/package.json apps/server/
@@ -56,15 +64,19 @@ COPY --from=build --chown=node:node /app/apps/web/dist ./web
 
 # The database volume mounts here; pre-create it owned by the runtime user so a
 # fresh named volume inherits writable permissions.
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data /data/backups /data/recordings && chown -R node:node /data
 VOLUME ["/data"]
 
 USER node
 EXPOSE 8080
 
 # readyz (not healthz) so a wedged alarm engine gets the container restarted.
-# busybox wget: cheaper than spawning node every 30 s on a Pi.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1
+  CMD ["node", "dist/healthcheck.js"]
+
+LABEL org.opencontainers.image.title="Rode" \
+      org.opencontainers.image.description="Self-hosted anchor watch and boat monitor" \
+      org.opencontainers.image.source="https://github.com/clucraft/rode" \
+      org.opencontainers.image.licenses="MIT"
 
 CMD ["node", "dist/index.js"]

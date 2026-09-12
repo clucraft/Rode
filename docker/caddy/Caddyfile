@@ -1,0 +1,24 @@
+# Rode behind Caddy (the `tls` compose profile).
+#
+# Pick ONE of the site blocks below and delete the other. Then set
+# RODE_TLS=true in .env so the session cookie carries the Secure flag and
+# HSTS is sent, and stop publishing port 8080 in docker-compose.yml if you
+# want plain HTTP closed.
+
+# ---- Option 1: Tailscale certificate (no public DNS needed) ---------------
+# On the host: `tailscale cert rode.<tailnet>.ts.net` and copy the .crt and
+# .key into docker/caddy/certs/. Renew it every ~60 days (cron or a systemd
+# timer running the same command).
+rode.example-tailnet.ts.net {
+  tls /certs/rode.example-tailnet.ts.net.crt /certs/rode.example-tailnet.ts.net.key
+  encode gzip
+  reverse_proxy rode:8080
+}
+
+# ---- Option 2: Let's Encrypt with a real hostname ------------------------
+# Needs port 80/443 reachable from the internet at issue time, or a DNS
+# provider plugin for the DNS challenge. Uncomment and adjust:
+# rode.yourdomain.example {
+#   encode gzip
+#   reverse_proxy rode:8080
+# }

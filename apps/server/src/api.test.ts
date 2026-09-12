@@ -267,3 +267,20 @@ async function wait(cond: () => boolean, timeoutMs = 3000): Promise<void> {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
+
+describe('admin API', () => {
+  it('streams a consistent SQLite backup to admins only', async () => {
+    const { app, env, c } = await boot();
+    feed(env.services, env.clock);
+    await c.req({ method: 'POST', url: '/api/anchor/marina' });
+    const res = await c.req({ method: 'GET', url: '/api/admin/backup' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.sqlite3');
+    expect(res.headers['content-disposition']).toMatch(/attachment; filename="rode-.*\.db"/);
+    // SQLite header magic.
+    expect(res.rawPayload.subarray(0, 16).toString('utf8')).toBe('SQLite format 3\u0000');
+    expect(res.rawPayload.length).toBeGreaterThan(4096);
+    const anon = await app.inject({ method: 'GET', url: '/api/admin/backup' });
+    expect(anon.statusCode).toBe(401);
+  });
+});

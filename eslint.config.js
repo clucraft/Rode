@@ -71,7 +71,7 @@ export default tseslint.config(
   },
   {
     // Command-line entry points print to stdout by design.
-    files: ['**/cli.ts', '**/scripts/**'],
+    files: ['**/cli.ts', '**/backup.ts', '**/scripts/**'],
     rules: { 'no-console': 'off' },
   },
   {

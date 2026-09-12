@@ -9,7 +9,7 @@ SPEED ?= 60
 HOST ?= 192.168.1.100
 PORT ?= 39150
 
-.PHONY: help install up down dev test lint typecheck check build sim record backup logs clean
+.PHONY: help install up down dev test lint typecheck check build sim record backup restore image logs clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -47,7 +47,18 @@ record: ## Record the live NMEA stream from the Cortex to recordings/ (HOST=... 
 	pnpm --filter @rode/ingest sim record --host $(HOST) --port $(PORT)
 
 backup: ## Consistent SQLite snapshot of the running database into ./backups
-	@echo "backup tooling arrives in phase 10 (uses VACUUM INTO for a consistent copy)"; exit 1
+	@mkdir -p backups
+	@f=$($(COMPOSE) exec -T rode node dist/backup.js) && 	  docker cp rode:"$f" backups/ && 	  echo "saved backups/$(basename $f)"
+
+restore: ## Restore a backup: make restore FILE=backups/rode-....db (stops the stack)
+	@test -n "$(FILE)" || (echo "FILE=path/to/backup.db required"; exit 1)
+	$(COMPOSE) stop rode
+	docker cp "$(FILE)" rode:/data/rode.db
+	docker run --rm -v rode_rode-data:/data alpine sh -c 'rm -f /data/rode.db-wal /data/rode.db-shm && chown 1000:1000 /data/rode.db'
+	$(COMPOSE) start rode
+
+image: ## Build the multi-arch image locally (needs buildx + qemu)
+	docker buildx build --platform linux/amd64,linux/arm64 -f docker/server.Dockerfile -t ghcr.io/clucraft/rode:dev .
 
 logs: ## Tail the stack logs
 	$(COMPOSE) logs -f --tail=200

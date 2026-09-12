@@ -9,6 +9,7 @@ import type { HealthResponse } from '@rode/protocol';
 import type { Config } from './config.js';
 import type { AppContext } from './context.js';
 import { authenticate, configureGuard, setupGate } from './auth/guard.js';
+import { adminRoutes } from './routes/admin.js';
 import { anchorRoutes } from './routes/anchor.js';
 import { authRoutes } from './routes/auth.js';
 import { diagnosticsRoutes } from './routes/diagnostics.js';
@@ -153,6 +154,7 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
   settingsRoutes(app, ctx);
   diagnosticsRoutes(app, ctx);
   notificationRoutes(app, ctx);
+  adminRoutes(app, ctx);
   websocketRoutes(app, ctx);
 
   const webDir = ctx.config.RODE_WEB_DIR;
