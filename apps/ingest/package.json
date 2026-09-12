@@ -17,10 +17,12 @@
   },
   "dependencies": {
     "@rode/core": "workspace:*",
-    "@rode/protocol": "workspace:*"
+    "@rode/protocol": "workspace:*",
+    "ggencoder": "1.0.11"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "fast-check": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

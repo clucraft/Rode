@@ -12,9 +12,10 @@ import {
   type WatchState,
 } from './anchor.js';
 import { DEFAULT_ALARM_CONFIG, type AlarmConfig } from './config.js';
+import { DEFAULT_MARINA_CONFIG, type MarinaConfig } from './marina.js';
 import { destination } from './geodesy.js';
 import type { BoatGeometry, Field, LatLon, Telemetry } from './types.js';
-import { degToRad, knotsToMps } from './units.js';
+import { celsiusToKelvin, degToRad, knotsToMps } from './units.js';
 import type { ExclusionZone } from './zones.js';
 
 // ---------------------------------------------------------------- harness
@@ -36,6 +37,12 @@ interface Scene {
   connected?: boolean;
   /** Age of the position sample relative to now, ms. */
   positionAge?: number;
+  fridgeTemp?: number | null;
+  freezerTemp?: number | null;
+  airTemp?: number | null;
+  batterySoc?: number | null;
+  solarPower?: number | null;
+  localHour?: number | null;
 }
 
 function field<T>(value: T, now: number, age = 0): Field<T> {
@@ -47,14 +54,23 @@ class Harness {
   now: number;
   events: EngineEvent[] = [];
   config: AlarmConfig;
+  marinaConfig: MarinaConfig;
   zones: ExclusionZone[] = [];
   boat: BoatGeometry;
   private ids = 0;
   private disconnectedSince: number | null = null;
 
-  constructor(opts: { config?: Partial<AlarmConfig>; boat?: BoatGeometry; start?: number } = {}) {
+  constructor(
+    opts: {
+      config?: Partial<AlarmConfig>;
+      marinaConfig?: Partial<MarinaConfig>;
+      boat?: BoatGeometry;
+      start?: number;
+    } = {},
+  ) {
     this.now = opts.start ?? 1_700_000_000_000;
     this.config = { ...DEFAULT_ALARM_CONFIG, ...opts.config };
+    this.marinaConfig = { ...DEFAULT_MARINA_CONFIG, ...opts.marinaConfig };
     this.boat = opts.boat ?? BOAT;
     this.state = createWatchState(this.now);
   }
@@ -72,7 +88,19 @@ class Harness {
     if (scene.position !== null) {
       t.position = field(scene.position ?? ANCHOR, now, scene.positionAge ?? 0);
     }
-    type NumKey = 'sog' | 'cog' | 'heading' | 'depth' | 'awa' | 'aws' | 'hdop';
+    type NumKey =
+      | 'sog'
+      | 'cog'
+      | 'heading'
+      | 'depth'
+      | 'awa'
+      | 'aws'
+      | 'hdop'
+      | 'fridgeTemp'
+      | 'freezerTemp'
+      | 'airTemp'
+      | 'batterySoc'
+      | 'solarPower';
     const num = (k: NumKey, v: number | null | undefined, dflt?: number) => {
       const val = v === undefined ? dflt : v;
       if (val !== null && val !== undefined) t[k] = field(val, now);
@@ -84,12 +112,19 @@ class Harness {
     num('awa', scene.awa, 0);
     num('aws', scene.aws, knotsToMps(12));
     num('hdop', scene.hdop, 1);
+    num('fridgeTemp', scene.fridgeTemp);
+    num('freezerTemp', scene.freezerTemp);
+    num('airTemp', scene.airTemp);
+    num('batterySoc', scene.batterySoc);
+    num('solarPower', scene.solarPower);
     return {
       now,
       telemetry: t,
       config: this.config,
       boat: this.boat,
       zones: this.zones,
+      marinaConfig: this.marinaConfig,
+      localHour: scene.localHour ?? null,
       newId: () => `s${++this.ids}`,
     };
   }
@@ -684,5 +719,102 @@ describe('invariants', () => {
     const g = h.anchorUp(30);
     h.run(20, { position: at(0, (g?.swingRadius ?? 0) + 5) });
     expect(h.state.stateName).toBe('ALARM');
+  });
+});
+
+// ---------------------------------------------------------------- marina monitors
+
+describe('marina: refrigeration', () => {
+  const C = (c: number) => celsiusToKelvin(c);
+
+  it('reports every band transition as the freezer fails, including into "off"', () => {
+    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    h.run(30, { position: ANCHOR, freezerTemp: C(-18), airTemp: C(22) });
+    // Warms 1 °C per 20 s from -18 to +22 (ambient): 800 s.
+    const ev = h.run(800, (i) => ({
+      position: ANCHOR,
+      freezerTemp: C(-18 + i / 20),
+      airTemp: C(22),
+    }));
+    const bands = ev
+      .filter((e) => e.type === 'cold-box-band-changed' && e.box === 'freezer')
+      .map((e) => (e.type === 'cold-box-band-changed' ? e.to : ''));
+    expect(bands).toEqual(['warm', 'failing', 'off']);
+    // The condition raised and cleared along the way and the state is now
+    // quiet: that is the trap, and the transition log is what catches it.
+    expect(raised(ev, 'freezer-warm')).toHaveLength(1);
+    expect(raised(ev, 'freezer-failing')).toHaveLength(1);
+    expect(cleared(ev, 'freezer-failing')).toHaveLength(1);
+    expect(h.conditionKeys()).toEqual([]);
+    expect(h.state.marina.freezer.band).toBe('off');
+  });
+
+  it('a box at ambient is "off", not failing; leaving "off" for normal is reported', () => {
+    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    const off = h.run(30, { position: ANCHOR, fridgeTemp: C(21), airTemp: C(22) });
+    expect(off.filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(1);
+    expect(h.state.marina.fridge.band).toBe('off');
+    expect(h.conditionKeys()).toEqual([]);
+    const on = h.run(30, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
+    expect(on.find((e) => e.type === 'cold-box-band-changed')).toMatchObject({
+      box: 'fridge',
+      from: 'off',
+      to: 'normal',
+    });
+  });
+
+  it('does not report a transition for a brief spike (loading provisions)', () => {
+    const h = new Harness({ marinaConfig: { bandHoldMs: 60_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    h.run(70, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
+    const spike = h.run(40, { position: ANCHOR, fridgeTemp: C(10), airTemp: C(22) });
+    const back = h.run(70, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
+    expect([...spike, ...back].filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(0);
+  });
+
+  it('uses the absolute fallback when there is no ambient reading', () => {
+    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    h.run(30, { position: ANCHOR, freezerTemp: C(16) });
+    expect(h.state.marina.freezer.band).toBe('off');
+  });
+});
+
+describe('marina: battery and solar', () => {
+  it('rides through an overnight SoC dip but alarms on a sustained one', () => {
+    const h = new Harness({ marinaConfig: { socHoldMs: 20 * 60_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    const dip = h.run(600, { position: ANCHOR, batterySoc: 0.45 });
+    const rec = h.run(60, { position: ANCHOR, batterySoc: 0.6 });
+    expect(has([...dip, ...rec], 'condition-raised')).toBe(false);
+    const low = h.run(25 * 60, { position: ANCHOR, batterySoc: 0.45 });
+    expect(raised(low, 'battery-low')).toHaveLength(1);
+    expect(h.state.conditions['battery-low']?.severity).toBe('warning');
+    const crit = h.run(25 * 60, { position: ANCHOR, batterySoc: 0.25 });
+    expect(crit.filter((e) => e.type === 'condition-escalated')).toHaveLength(1);
+  });
+
+  it('warns on no solar yield through the midday window, not at night', () => {
+    const h = new Harness({ marinaConfig: { solarHoldMs: 60 * 60_000 } });
+    h.cmd({ type: 'marina' }, { position: ANCHOR });
+    const night = h.run(2 * 3600, { position: ANCHOR, solarPower: 0, localHour: 2 });
+    expect(has(night, 'condition-raised')).toBe(false);
+    const day = h.run(2 * 3600, { position: ANCHOR, solarPower: 5, localHour: 12 });
+    expect(raised(day, 'solar-no-yield')).toHaveLength(1);
+    const producing = h.run(15, { position: ANCHOR, solarPower: 180, localHour: 12 });
+    expect(cleared(producing, 'solar-no-yield')).toHaveLength(1);
+  });
+
+  it('does not run the monitors at anchor', () => {
+    const h = new Harness({ marinaConfig: { bandHoldMs: 1_000 } });
+    h.anchorUp(30);
+    const ev = h.run(30, {
+      position: at(0, 30),
+      freezerTemp: celsiusToKelvin(0),
+      airTemp: celsiusToKelvin(22),
+    });
+    expect(ev.filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(0);
   });
 });

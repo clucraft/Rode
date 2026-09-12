@@ -74,10 +74,16 @@ importers:
       '@rode/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      ggencoder:
+        specifier: 1.0.11
+        version: 1.0.11
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.2
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.10.0
       tsx:
         specifier: 'catalog:'
         version: 4.23.13
@@ -1255,6 +1261,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  ggencoder@1.0.11:
+    resolution: {integrity: sha512-hx0r1YfgY6Fcd7VJj3uxJcDb057+NQ2DZu5YWqhLq3/hsqrNkkCSKzwp+fdg7BuETTki5ZXwk5tIOzMj5dYNJA==}
+    hasBin: true
 
   glob-parent@6.0.2:
     resolution: {integrity: sha512-XxwI8EOhVQgWp6iDL+3b0r86f4d6AX6zSU55HfB4ydCEuXLXc5FcYeOu+nnGftS4TEju/11rt4KJPTMgbfmv4A==}
@@ -2785,6 +2795,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  ggencoder@1.0.11: {}
 
   glob-parent@6.0.2:
     dependencies:

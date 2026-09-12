@@ -9,6 +9,15 @@ import {
 } from './geometry.js';
 import type { BoatGeometry, LatLon, Severity, Telemetry } from './types.js';
 import { evaluateZone, type ExclusionZone } from './zones.js';
+import {
+  createMarinaState,
+  stepMarina,
+  type ColdBand,
+  type ColdBox,
+  type MarinaConfig,
+  type MarinaConditionKey,
+  type MarinaState,
+} from './marina.js';
 
 /*
  * The anchor watch as a pure state machine.
@@ -44,7 +53,8 @@ export type ConditionId =
   | 'source-disconnected'
   | 'depth-shallow'
   | 'zone-breach'
-  | 'zone-projected';
+  | 'zone-projected'
+  | MarinaConditionKey;
 
 export type ConditionValues = Record<string, number | string | boolean | null>;
 
@@ -132,6 +142,8 @@ export interface WatchState {
   /** Times the alarm has re-fired after a snooze in this alarm episode. */
   refires: number;
   live: LiveValues;
+  /** Refrigeration / battery / solar monitors; only stepped in MARINA. */
+  marina: MarinaState;
 }
 
 export type EngineEvent = { at: number } & (
@@ -170,6 +182,14 @@ export type EngineEvent = { at: number } & (
     }
   | { type: 'alarm-refire'; refires: number; conditions: string[]; values: ConditionValues }
   | { type: 'command-rejected'; command: Command['type']; reason: string; message: string }
+  | {
+      type: 'cold-box-band-changed';
+      box: ColdBox;
+      from: ColdBand;
+      to: ColdBand;
+      temp: number | null;
+      ambient: number | null;
+    }
 );
 
 export type Command =
@@ -188,6 +208,9 @@ export interface EngineContext {
   config: AlarmConfig;
   boat: BoatGeometry;
   zones: readonly ExclusionZone[];
+  marinaConfig: MarinaConfig;
+  /** Local hour of day (0–23) for the solar window; null when the clock is not synced. */
+  localHour?: number | null;
   /** Session id generator. Injected so the core stays pure and tests stay deterministic. */
   newId: () => string;
   /** Target scope used for the IDLE rode suggestion. Default 5. */
@@ -218,6 +241,7 @@ export function createWatchState(now: number): WatchState {
     ack: null,
     refires: 0,
     live: emptyLive(),
+    marina: createMarinaState(),
   };
 }
 
@@ -632,6 +656,7 @@ function marina(state: WatchState, ctx: EngineContext): StepResult {
     detectors: freshDetectors(),
     ack: null,
     refires: 0,
+    marina: createMarinaState(),
   };
   const events: EngineEvent[] = [
     { at: now, type: 'session-started', sessionId: session.id, mode: 'marina' },
@@ -901,6 +926,38 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
     }
   }
 
+  // ---- marina monitors: refrigeration bands, battery, solar.
+  let marinaState = state.marina;
+  if (watching && session?.mode === 'marina') {
+    const m = stepMarina(state.marina, telemetry, ctx.marinaConfig, now, ctx.localHour ?? null);
+    marinaState = m.state;
+    for (const t of m.result.transitions) {
+      events.push({ at: now, type: 'cold-box-band-changed', ...t });
+    }
+    const wanted = new Map(m.result.conditions.map((c) => [c.key, c]));
+    const allKeys: MarinaConditionKey[] = [
+      'fridge-warm',
+      'fridge-failing',
+      'freezer-warm',
+      'freezer-failing',
+      'battery-low',
+      'solar-no-yield',
+    ];
+    for (const key of allKeys) {
+      const c = wanted.get(key);
+      syncCondition(
+        state,
+        raised,
+        cleared,
+        key,
+        c !== undefined,
+        c?.severity ?? 'warning',
+        now,
+        c?.values ?? {},
+      );
+    }
+  }
+
   // ---- liveness: evaluated while DROPPING too, because the next step depends on it.
   const gpsSeverity: Severity | null =
     positionAgeMs >= config.gpsStaleCriticalMs
@@ -998,6 +1055,7 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
     ack: ackState,
     refires,
     live,
+    marina: marinaState,
   };
   return finishTransition(state, next, events, now, liveValuesFrom(live, sog));
 }
