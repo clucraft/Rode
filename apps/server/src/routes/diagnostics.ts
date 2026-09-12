@@ -22,7 +22,7 @@ export function diagnosticsRoutes(app: FastifyInstance, ctx: AppContext): void {
       source: ctx.ingest.view(),
       fieldAgeSeconds: fieldAges,
       samples: { count: samples.count, oldestAt: samples.oldest },
-      time: timeView(n, now),
+      time: timeView(n, now, ctx.state.clockSource()),
       health: healthView(ctx.state, now),
       engine: {
         phase: ctx.engine.getState().phase,

@@ -105,6 +105,8 @@ export interface AisTargetView {
 export interface TimeView {
   /** Server wall clock, ms epoch. */
   now: number;
+  /** Where the server's clock comes from. "unsynced" means timestamps cannot be trusted yet. */
+  clockSource: 'system' | 'gps' | 'unsynced';
   /** True once a plausible GPS time has been seen this boot. */
   gpsSynced: boolean;
   /** GPS time minus system time at the last sync, ms. Large values mean the system clock is wrong. */

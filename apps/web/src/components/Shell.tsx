@@ -72,6 +72,14 @@ export function Shell() {
               ? `ok ${fmtDuration(Date.now() - state.health.notificationsLastConfirmedAt)} ago`
               : 'unconfirmed'}
           </span>
+          {state?.time.clockSource && state.time.clockSource !== 'system' ? (
+            <span
+              className={`pill ${state.time.clockSource === 'gps' ? '' : 'warn'}`}
+              title="The box has no trusted system clock"
+            >
+              {state.time.clockSource === 'gps' ? 'clock from GPS' : 'clock unsynced'}
+            </span>
+          ) : null}
           {state?.health.unexpectedRestart ? (
             <span className="pill warn" title="The box restarted without a clean shutdown">
               restarted

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { Logger } from './logger.js';
 import { Bus } from './bus.js';
+import { Clock } from './clock.js';
 import { envSourceOverrides, type Config } from './config.js';
 import { openDatabase, type Db } from './db/database.js';
 import { createRepos, type Repos } from './db/repos.js';
@@ -47,7 +48,10 @@ export interface ServiceOptions {
 
 export function createServices(opts: ServiceOptions): Services {
   const { config, log } = opts;
-  const now = opts.now ?? Date.now;
+  // Test hook: an injected clock is trusted as-is. In production the Clock
+  // falls back to GPS time when the system clock is implausible.
+  const clock = new Clock(opts.now ?? Date.now);
+  const now = opts.now ?? (() => clock.now());
   const dbFile = config.RODE_DB_FILE ?? path.join(config.RODE_DATA_DIR, 'rode.db');
   const db: Db = openDatabase({ file: dbFile });
   const repos: Repos = createRepos(db);
@@ -93,6 +97,7 @@ export function createServices(opts: ServiceOptions): Services {
     now,
   });
 
+  clock.attach(ingest.normalizer);
   const diagnostics = new Diagnostics(ingest.normalizer, now);
   const auth = new AuthService({
     repos: createAuthRepos(db),
@@ -185,6 +190,7 @@ export function createServices(opts: ServiceOptions): Services {
     bootedAt,
     unexpectedRestart,
     timeZone: () => settings.view().timeZone,
+    clockSource: () => clock.source(),
     notificationsLastConfirmedAt: () =>
       dispatcher.getStats().lastConfirmedAt ?? notifications.lastConfirmedAt,
     now,
@@ -258,6 +264,7 @@ export function createServices(opts: ServiceOptions): Services {
       sampleWriter.stop();
       diagnostics.stop();
       await ingest.stop();
+      clock.detach();
       engine.stop();
       repos.runtime.set(CLEAN_SHUTDOWN, '1');
       repos.events.append('shutdown', { clean: true }, 'info', now());

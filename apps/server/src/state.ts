@@ -25,6 +25,7 @@ export interface StateDeps {
   bootedAt: number;
   unexpectedRestart: boolean;
   timeZone: () => string;
+  clockSource: () => 'system' | 'gps' | 'unsynced';
   notificationsLastConfirmedAt: () => number | null;
   now?: () => number;
 }
@@ -146,10 +147,15 @@ export function localHour(now: number, timeZone: string): number | null {
   }
 }
 
-export function timeView(normalizer: Normalizer, now: number): TimeView {
+export function timeView(
+  normalizer: Normalizer,
+  now: number,
+  clockSource: TimeView['clockSource'] = 'system',
+): TimeView {
   const gps = normalizer.getGpsTime();
   return {
     now,
+    clockSource,
     gpsSynced: gps !== null,
     gpsOffsetMs: gps ? gps.epochMs - gps.receivedAt : null,
     lastGpsSyncAt: gps?.receivedAt ?? null,
@@ -180,7 +186,7 @@ export function fullState(deps: StateDeps): FullState {
     instruments: instrumentsView(n, now),
     source: deps.ingest.view(),
     ais: aisView(n.ais.all(), own, sog, cog),
-    time: timeView(n, now),
+    time: timeView(n, now, deps.clockSource()),
     health: healthView(deps, now),
     recentEvents: deps.repos.events.recent(50),
   };

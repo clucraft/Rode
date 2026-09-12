@@ -368,3 +368,15 @@ Debian slim has neither `wget` nor `curl`. Installing one adds packages to
 a read-only image for one probe; spawning node every 30 s costs a few
 milliseconds of CPU on a Pi 5. The script hits `/readyz`, so a wedged engine
 fails the check.
+
+## 10.4 — The process clock falls back to GPS and says which it is using
+
+**Context.** A Pi has no RTC. Booting at anchor with no internet leaves the
+system clock at 1970 or at last shutdown, possibly forever.
+
+**Decision.** `Clock.now()` uses the system clock when it is after 2020,
+else GPS time (from ZDA/RMC) plus monotonic elapsed time, else the system
+clock while reporting `unsynced`. The source is part of the time view and
+shows as a pill in the status strip. GPS dates before 2020 are rejected so
+a receiver without a fix cannot poison it. Tests inject a fixed clock and
+bypass the fallback.
