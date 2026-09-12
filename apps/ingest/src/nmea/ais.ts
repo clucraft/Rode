@@ -1,3 +1,4 @@
+/// <reference path="../../types/ggencoder.d.ts" />
 import ggencoder, { type AisDecodeResult } from 'ggencoder';
 import { degToRad, knotsToMps } from '@rode/core';
 

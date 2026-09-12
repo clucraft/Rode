@@ -4,3 +4,5 @@
 // the inferred types for free. Nothing here has behaviour.
 
 export * from './health.js';
+export * from './state.js';
+export * from './api.js';

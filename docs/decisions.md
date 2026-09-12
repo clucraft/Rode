@@ -183,3 +183,34 @@ One line per sentence, tab-separated, append-only. Trivially greppable,
 replayable with original timing, and a bare NMEA log from any other tool
 (no tab) still replays at a fixed rate. Real recordings from the boat become
 test fixtures without conversion.
+
+## 4.1 — Engine state and events commit in one transaction
+
+**Decision.** `EngineHost.persist` writes the serialised WatchState and
+appends the events that tick produced inside a single SQLite transaction.
+Every event forces a write; otherwise state is written every 15 s.
+
+**Why.** If power goes between "engine raised ALARM" and "event logged", the
+disk must not end up with one and not the other. The 15 s periodic write
+keeps detector timers roughly current across a restart without writing at
+1 Hz to an SD card.
+
+## 4.2 — Samples are buffered, never written at 1 Hz
+
+**Decision.** `SampleWriter` captures one row per second in memory and
+flushes every 10 s in one transaction. Rows with no usable position are not
+written at all.
+
+**Why.** The spec's power budget. Ten small transactions a minute is nothing;
+sixty is a needless SD-card workout. The alarm engine never reads this table.
+
+## 4.3 — Every route reads the clock from the context, never `Date.now()`
+
+**Decision.** `AppContext.now` is the process clock; services, routes and
+the WebSocket layer all use it.
+
+**Why.** Tests drive the engine with a fake clock. The first version of the
+readiness check used `Date.now()` and declared a perfectly healthy engine
+stalled because its last tick was "in 2026". The bug was in a test, but the
+class of bug (two clocks in one process) is exactly what bites on a Pi with
+no RTC when GPS time arrives.

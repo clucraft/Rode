@@ -1,3 +1,4 @@
+/// <reference path="../../types/ggencoder.d.ts" />
 import ggencoder from 'ggencoder';
 import { mpsToKnots, radToDeg } from '@rode/core';
 import {

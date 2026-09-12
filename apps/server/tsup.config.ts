@@ -1,7 +1,9 @@
 import { defineConfig } from 'tsup';
 
-// Single-file production bundle. Workspace packages are inlined so the runtime
-// image needs only node_modules for native/third-party deps.
+// Single-file production bundle of *our* code. Workspace packages are inlined;
+// everything from node_modules stays external and is installed by
+// `pnpm deploy` in the Docker build. Bundling third-party CommonJS into ESM
+// breaks on dynamic requires, so we do not try.
 export default defineConfig({
   entry: { index: 'src/index.ts' },
   format: ['esm'],
@@ -10,7 +12,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   splitting: false,
+  skipNodeModulesBundle: true,
   noExternal: [/^@rode\//],
-  // Keep native and runtime deps external; they come from node_modules.
-  external: ['better-sqlite3'],
 });
