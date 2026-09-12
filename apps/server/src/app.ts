@@ -153,15 +153,9 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
   diagnosticsRoutes(app, ctx);
   websocketRoutes(app, ctx);
 
-  app.setNotFoundHandler((req, reply) => {
-    if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
-      return reply.code(404).send({ error: 'not-found' });
-    }
-    return reply.code(404).send('Not found');
-  });
-
   const webDir = ctx.config.RODE_WEB_DIR;
-  if (webDir && existsSync(path.join(webDir, 'index.html'))) {
+  const serveWeb = Boolean(webDir && existsSync(path.join(webDir, 'index.html')));
+  if (serveWeb && webDir) {
     await app.register(fastifyStatic, {
       root: webDir,
       prefix: '/',
@@ -169,12 +163,15 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
       maxAge: '1h',
       immutable: false,
     });
-    // SPA fallback: any non-API path serves the shell.
-    app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
-        return reply.code(404).send({ error: 'not-found' });
-      }
-      return reply.sendFile('index.html');
-    });
   }
+
+  // One not-found handler: JSON for the API, the SPA shell for everything else
+  // (client-side routes such as /history/abc must load index.html).
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
+      return reply.code(404).send({ error: 'not-found' });
+    }
+    if (serveWeb) return reply.sendFile('index.html');
+    return reply.code(404).type('text/plain').send('Not found');
+  });
 }

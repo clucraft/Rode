@@ -59,6 +59,13 @@ export default tseslint.config(
   {
     files: ['apps/web/**'],
     languageOptions: { globals: { ...globals.browser } },
+    rules: {
+      // React event handlers may be async; React ignores the returned promise.
+      '@typescript-eslint/no-misused-promises': [
+        'error',
+        { checksVoidReturn: { attributes: false } },
+      ],
+    },
   },
   {
     // Command-line entry points print to stdout by design.

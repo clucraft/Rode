@@ -1,0 +1,704 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ActiveCondition, LatLon, WatchStateName } from '@rode/core';
+import type { TrackPoint, Units, ZoneRecord } from '@rode/protocol';
+import { api, errorMessage } from '../api/client.js';
+import { useStore } from '../api/store.js';
+import { useAuth } from '../api/auth.js';
+import { armAudio, disarmAudio, setAlarmLevel, useAudio } from '../lib/audio.js';
+import {
+  DEFAULT_UNITS,
+  fmtBearing,
+  fmtDepth,
+  fmtDistance,
+  fmtDuration,
+  fmtRelativeAngle,
+  fmtRode,
+  fmtScope,
+  fmtSpeed,
+} from '../lib/format.js';
+import { useLocal } from '../lib/useLocal.js';
+import { useWakeLock } from '../lib/wakelock.js';
+import { ConfirmDialog, Dialog, Readout } from '../components/common.js';
+import { PolarView } from '../components/PolarView.jsx';
+
+/*
+ * The Watch screen. Home when a session is active. Big unmissable banner,
+ * the polar view, the distances that matter as the largest things on the
+ * screen, and the controls in the lower third for wet hands.
+ */
+
+const STATE_LABEL: Record<WatchStateName, string> = {
+  IDLE: 'Not watching',
+  DROPPING: 'Anchor down',
+  SET: 'Watching',
+  MARINA: 'Marina watch',
+  WARNING: 'Warning',
+  ALARM: 'Alarm',
+};
+
+const CONDITION_LABEL: Record<string, string> = {
+  'position-warning': 'Near the edge of the swing circle',
+  'position-outside': 'Outside the swing circle',
+  'wind-shift': 'Wind off the bow',
+  speed: 'Moving',
+  breakout: 'Break-out: moving with wind off the bow',
+  'gps-stale': 'No GPS position',
+  'source-disconnected': 'Data source disconnected',
+  'depth-shallow': 'Shallow water',
+  'zone-breach': 'In an exclusion zone',
+  'zone-projected': 'Heading for an exclusion zone',
+  'fridge-warm': 'Fridge warm',
+  'fridge-failing': 'Fridge failing',
+  'freezer-warm': 'Freezer warm',
+  'freezer-failing': 'Freezer failing',
+  'battery-low': 'Battery low',
+  'solar-no-yield': 'No solar yield',
+};
+
+export function Watch() {
+  const { state, link, clockOffsetMs } = useStore();
+  const { settings, user } = useAuth();
+  const audio = useAudio();
+  const units = settings?.units ?? DEFAULT_UNITS;
+  const [error, setError] = useState<string | null>(null);
+  const [confirmWeigh, setConfirmWeigh] = useState(false);
+  const [depthPrompt, setDepthPrompt] = useState(false);
+  const [tidePrompt, setTidePrompt] = useState(false);
+  const [nudge, setNudge] = useState(false);
+  const [showAis, setShowAis] = useLocal('rode:watch-ais', true);
+  const [trackHours, setTrackHours] = useLocal('rode:track-hours', 6);
+  const [zones, setZones] = useState<ZoneRecord[]>([]);
+  const [track, setTrack] = useState<TrackPoint[]>([]);
+
+  const wakeLocked = useWakeLock(true);
+  const watch = state?.watch ?? null;
+  const stateName: WatchStateName = watch?.stateName ?? 'IDLE';
+  const session = watch?.session ?? null;
+  const geometry = session?.geometry ?? null;
+  const instruments = state?.instruments ?? {};
+  const serverNow = Date.now() + clockOffsetMs;
+
+  // Alarm audio follows the server's state; snoozing silences it.
+  useEffect(() => {
+    if (!watch) return;
+    const level = stateName === 'ALARM' ? 'critical' : stateName === 'WARNING' ? 'warning' : 'none';
+    setAlarmLevel(level, watch.snoozed, watch.refires);
+  }, [stateName, watch]);
+
+  // Zones for the overlay.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<ZoneRecord[]>('/api/zones')
+      .then((z) => {
+        if (!cancelled) setZones(z);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id]);
+
+  // Track history: fetch on session/hours change, then append live positions.
+  useEffect(() => {
+    let cancelled = false;
+    const from = Math.max(session?.startedAt ?? 0, serverNow - trackHours * 3_600_000);
+    api
+      .get<TrackPoint[]>(`/api/track?from=${from}&limit=5000`)
+      .then((t) => {
+        if (!cancelled) setTrack(t);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // serverNow intentionally excluded: refetch only when the window changes.
+  }, [session?.id, trackHours]);
+  const boat = watch?.live.boat ?? null;
+  useEffect(() => {
+    if (!boat) return;
+    setTrack((t) => {
+      const last = t[t.length - 1];
+      if (last && Math.abs(last.lat - boat.lat) < 1e-7 && Math.abs(last.lon - boat.lon) < 1e-7)
+        return t;
+      const next = [
+        ...t,
+        { at: serverNow, lat: boat.lat, lon: boat.lon, sog: null, heading: null, distance: null },
+      ];
+      return next.length > 6000 ? next.slice(-6000) : next;
+    });
+  }, [boat?.lat, boat?.lon]);
+
+  const command = useCallback(async (path: string, body?: unknown) => {
+    setError(null);
+    try {
+      const r = await api.post<{ ok: boolean; reason?: string; message?: string }>(path, body);
+      if (!r.ok) {
+        if (r.reason === 'depth-required') setDepthPrompt(true);
+        else setError(r.message ?? 'That did not work.');
+      }
+      return r.ok;
+    } catch (e) {
+      setError(errorMessage(e));
+      return false;
+    }
+  }, []);
+
+  const onNudge = useCallback(
+    (anchor: LatLon) => {
+      void command('/api/anchor/nudge', { anchor });
+    },
+    [command],
+  );
+
+  const conditions = useMemo(
+    () =>
+      (watch?.conditions ?? [])
+        .slice()
+        .sort((a, b) =>
+          a.severity === b.severity ? a.since - b.since : a.severity === 'critical' ? -1 : 1,
+        ),
+    [watch],
+  );
+
+  const centre = session?.mode === 'marina' ? session.marinaCentre : (session?.anchor ?? null);
+  const radius =
+    session?.mode === 'marina' ? session.marinaRadius : (geometry?.swingRadius ?? null);
+  const warnRadius =
+    session?.mode === 'marina'
+      ? session.marinaRadius !== null && settings
+        ? Math.max(0, session.marinaRadius - (settings.alarm.warnDistance ?? 10))
+        : null
+      : (geometry?.warnRadius ?? null);
+  const hasFix = Boolean(boat) && (watch?.live.positionAgeS ?? 999) < 10;
+  const positionStale = !hasFix;
+  const canAct = user?.role === 'admin' || user?.role === 'crew';
+  const phase = watch?.phase ?? 'IDLE';
+  const offline = link !== 'live';
+
+  const bannerDetail = (): string => {
+    if (offline) return 'No connection to the boat. Showing the last known state.';
+    if (!watch) return 'Waiting for the boat…';
+    switch (stateName) {
+      case 'IDLE':
+        return hasFix ? 'Position good. Ready to drop.' : 'Waiting for a GPS fix.';
+      case 'DROPPING':
+        return session?.depthAtDrop === null
+          ? 'Back down, then enter the depth and press Anchor set.'
+          : 'Back down on the anchor, then press Anchor set.';
+      case 'SET':
+        return `Radius ${fmtDistance(radius, units).value} ${fmtDistance(radius, units).unit} · scope ${fmtScope(geometry?.scopeRatio).value}:1`;
+      case 'MARINA':
+        return `Radius ${fmtDistance(radius, units).value} ${fmtDistance(radius, units).unit} · wind detector off`;
+      case 'WARNING':
+      case 'ALARM': {
+        const top = conditions[0];
+        return top
+          ? (CONDITION_LABEL[top.id] ?? top.id) + (watch.snoozed ? ' · sound snoozed' : '')
+          : '';
+      }
+      default:
+        return '';
+    }
+  };
+
+  const since = (): string => {
+    const c = conditions[0];
+    if ((stateName === 'WARNING' || stateName === 'ALARM') && c)
+      return `for ${fmtDuration(serverNow - c.since)}`;
+    if (session && (stateName === 'SET' || stateName === 'MARINA'))
+      return `for ${fmtDuration(serverNow - (session.setAt ?? session.startedAt))}`;
+    return '';
+  };
+
+  return (
+    <div className="watch">
+      <section
+        className="banner"
+        data-state={offline ? 'IDLE' : stateName}
+        data-snoozed={watch?.snoozed ? 'true' : 'false'}
+        role="status"
+        aria-live="assertive"
+      >
+        <StateGlyph state={offline ? 'IDLE' : stateName} />
+        <div>
+          <div className="state">{offline ? 'OFFLINE' : STATE_LABEL[stateName].toUpperCase()}</div>
+          <div className="detail">{bannerDetail()}</div>
+        </div>
+        <div className="since num">{since()}</div>
+      </section>
+
+      {conditions.length > 0 ? (
+        <ul className="conditions" aria-label="Active conditions">
+          {conditions.map((c) => (
+            <li key={c.key} className={c.severity}>
+              <span className="cid">{CONDITION_LABEL[c.id] ?? c.id}</span>
+              <span className="cvals num">{conditionValues(c, units)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <PolarView
+        state={stateName}
+        anchor={centre}
+        swingRadius={radius}
+        warnRadius={warnRadius}
+        boat={boat}
+        headingRad={
+          instruments.heading && !instruments.heading.stale ? instruments.heading.value : null
+        }
+        positionStale={positionStale}
+        track={track}
+        zones={zones}
+        ais={state?.ais ?? []}
+        units={units}
+        setPosition={session?.setPosition ?? null}
+        nudgeMode={nudge && phase === 'SET'}
+        onNudge={onNudge}
+        showAis={showAis}
+      />
+
+      <div className="track-range">
+        <label htmlFor="track-hours">Track</label>
+        <input
+          id="track-hours"
+          type="range"
+          min={1}
+          max={48}
+          step={1}
+          value={trackHours}
+          onChange={(e) => setTrackHours(Number(e.target.value))}
+          aria-valuetext={`${trackHours} hours`}
+        />
+        <span className="num">{trackHours} h</span>
+        <label className="checkbox small" style={{ minHeight: 0 }}>
+          <input type="checkbox" checked={showAis} onChange={(e) => setShowAis(e.target.checked)} />{' '}
+          AIS
+        </label>
+      </div>
+
+      <section className="hero-row">
+        {phase === 'IDLE' ? (
+          <>
+            <Readout
+              hero
+              label="Suggested rode"
+              value={fmtRode(watch?.live.suggestedRode, units)}
+              sub={`${settings?.suggestedScope ?? 5}:1 at current depth`}
+              stale={!instruments.depth || instruments.depth.stale}
+            />
+            <Readout
+              label="Depth"
+              value={fmtDepth(instruments.depth?.value, units)}
+              stale={instruments.depth?.stale ?? true}
+            />
+            <Readout
+              label="SOG"
+              value={fmtSpeed(instruments.sog?.value, units)}
+              stale={instruments.sog?.stale ?? true}
+            />
+          </>
+        ) : (
+          <>
+            <Readout
+              hero
+              label={session?.mode === 'marina' ? 'From marina position' : 'From anchor'}
+              value={fmtDistance(watch?.live.distanceFromAnchor, units)}
+              stale={positionStale}
+              sub={`bearing ${fmtBearing(watch?.live.bearingFromAnchor).value}°`}
+            />
+            <Readout
+              label="To edge"
+              value={fmtDistance(watch?.live.distanceToEdge, units)}
+              stale={positionStale}
+            />
+            <Readout label="Radius" value={fmtDistance(radius, units)} />
+            {geometry ? (
+              <>
+                <Readout
+                  label="Rode out"
+                  value={fmtRode(geometry.rodeLength, units)}
+                  sub={
+                    geometry.tideRange > 0
+                      ? `${fmtScope(geometry.scopeRatioAtHighWater).value}:1 at high water`
+                      : undefined
+                  }
+                />
+                <Readout label="Scope" value={fmtScope(geometry.scopeRatio)} />
+                <Readout
+                  label="Depth at drop"
+                  value={fmtDepth(geometry.depthAtDrop, units)}
+                  sub={session?.depthSource === 'manual' ? 'entered by hand' : 'from sounder'}
+                />
+              </>
+            ) : null}
+          </>
+        )}
+        <Readout
+          label="Position age"
+          value={{
+            value: String(watch?.live.positionAgeS ?? '—'),
+            unit: 's',
+            label: `${watch?.live.positionAgeS ?? 'unknown'} seconds`,
+          }}
+          stale={positionStale}
+        />
+        <Readout
+          label="Wind"
+          value={fmtRelativeAngle(instruments.awa?.value)}
+          sub={
+            instruments.aws
+              ? `${fmtSpeed(instruments.aws.value, units).value} ${fmtSpeed(instruments.aws.value, units).unit} apparent`
+              : undefined
+          }
+          stale={instruments.awa?.stale ?? true}
+        />
+      </section>
+
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <section className="controls" aria-label="Anchor controls">
+        <div className="audio-arm">
+          <span aria-live="polite">
+            Alarm sound on this device:{' '}
+            <span className={`state ${audio.armed ? 'on' : 'off'}`}>
+              {audio.armed ? 'ON' : 'OFF'}
+            </span>
+          </span>
+          {audio.armed ? (
+            <button type="button" className="btn quiet" onClick={disarmAudio}>
+              Turn off
+            </button>
+          ) : (
+            <button type="button" className="btn" onClick={() => void armAudio()}>
+              {audio.wasArmed ? 'Tap to re-arm' : 'Enable alarm sound'}
+            </button>
+          )}
+          {wakeLocked ? <span className="muted small">· screen stays on</span> : null}
+        </div>
+
+        {phase === 'IDLE' ? (
+          <div className="btn-row">
+            <button
+              type="button"
+              className="btn big primary"
+              disabled={!canAct || !hasFix || offline}
+              onClick={() => void command('/api/anchor/drop')}
+            >
+              Drop anchor
+            </button>
+            <button
+              type="button"
+              className="btn big"
+              disabled={!canAct || !hasFix || offline}
+              onClick={() => void command('/api/anchor/marina')}
+            >
+              Marina watch
+            </button>
+          </div>
+        ) : null}
+
+        {phase === 'DROPPING' ? (
+          <div className="btn-row">
+            <button
+              type="button"
+              className="btn big primary"
+              disabled={!canAct || !hasFix || offline}
+              onClick={() => void command('/api/anchor/set')}
+            >
+              Anchor set
+            </button>
+            {session?.depthAtDrop === null ? (
+              <button type="button" className="btn big" onClick={() => setDepthPrompt(true)}>
+                Enter depth
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn quiet"
+              disabled={!canAct || offline}
+              onClick={() => setConfirmWeigh(true)}
+            >
+              Cancel (weigh)
+            </button>
+          </div>
+        ) : null}
+
+        {phase === 'SET' || phase === 'MARINA' ? (
+          <>
+            {conditions.length > 0 ? (
+              <button
+                type="button"
+                className="btn big danger ack"
+                disabled={!canAct || offline || watch?.snoozed}
+                onClick={() => void command('/api/anchor/ack')}
+              >
+                {watch?.snoozed
+                  ? `Snoozed ${fmtDuration((watch.ack?.until ?? 0) - serverNow)}`
+                  : 'Acknowledge — silence for a while'}
+              </button>
+            ) : null}
+            <div className="btn-row">
+              {phase === 'SET' ? (
+                <>
+                  <button
+                    type="button"
+                    className={`btn ${nudge ? 'primary' : ''}`}
+                    disabled={!canAct}
+                    onClick={() => setNudge((n) => !n)}
+                    aria-pressed={nudge}
+                  >
+                    {nudge ? 'Done adjusting' : 'Adjust anchor'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!canAct || offline}
+                    onClick={() => setTidePrompt(true)}
+                  >
+                    Tide{' '}
+                    {geometry && geometry.tideRange > 0
+                      ? `${fmtDistance(geometry.tideRange, units).value} ${fmtDistance(geometry.tideRange, units).unit}`
+                      : ''}
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="btn"
+                disabled={!canAct || offline}
+                onClick={() => setConfirmWeigh(true)}
+              >
+                {phase === 'MARINA' ? 'Stop marina watch' : 'Weigh anchor'}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+
+      {confirmWeigh ? (
+        <ConfirmDialog
+          title={phase === 'MARINA' ? 'Stop the marina watch?' : 'Weigh anchor?'}
+          danger
+          body={<p>This ends the watch. Nothing will alarm until you drop again.</p>}
+          confirmLabel={phase === 'MARINA' ? 'Stop watching' : 'Weigh anchor'}
+          onConfirm={async () => {
+            if (!(await command('/api/anchor/weigh', { confirm: true })))
+              throw new Error('Could not end the session.');
+          }}
+          onClose={() => setConfirmWeigh(false)}
+        />
+      ) : null}
+
+      {depthPrompt ? (
+        <DepthDialog
+          units={units}
+          onClose={() => setDepthPrompt(false)}
+          onSubmit={(depth) => command('/api/anchor/depth', { depth })}
+        />
+      ) : null}
+      {tidePrompt ? (
+        <TideDialog
+          units={units}
+          current={geometry?.tideRange ?? 0}
+          onClose={() => setTidePrompt(false)}
+          onSubmit={(tideRange) => command('/api/anchor/tide', { tideRange })}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function StateGlyph({ state }: { state: WatchStateName }) {
+  // Shape carries the state, not only colour: circle idle, ring watching,
+  // triangle warning, octagon alarm.
+  switch (state) {
+    case 'WARNING':
+      return (
+        <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
+          <path d="M18 4 L34 32 H2 Z" fill="none" stroke="currentColor" strokeWidth="3" />
+          <line x1="18" y1="14" x2="18" y2="23" stroke="currentColor" strokeWidth="3" />
+          <circle cx="18" cy="27.5" r="1.8" fill="currentColor" />
+        </svg>
+      );
+    case 'ALARM':
+      return (
+        <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
+          <path d="M11 3 H25 L33 11 V25 L25 33 H11 L3 25 V11 Z" fill="currentColor" />
+          <line x1="18" y1="10" x2="18" y2="21" stroke="var(--bg)" strokeWidth="3.5" />
+          <circle cx="18" cy="26.5" r="2" fill="var(--bg)" />
+        </svg>
+      );
+    case 'SET':
+    case 'MARINA':
+      return (
+        <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
+          <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="3" />
+          <circle cx="18" cy="18" r="3" fill="currentColor" />
+        </svg>
+      );
+    case 'DROPPING':
+      return (
+        <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
+          <circle
+            cx="18"
+            cy="18"
+            r="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeDasharray="6 5"
+          />
+          <line x1="18" y1="9" x2="18" y2="27" stroke="currentColor" strokeWidth="3" />
+          <path d="M11 21 L18 28 L25 21" fill="none" stroke="currentColor" strokeWidth="3" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
+          <circle
+            cx="18"
+            cy="18"
+            r="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeDasharray="6 5"
+          />
+        </svg>
+      );
+  }
+}
+
+function conditionValues(c: ActiveCondition, units: Units): string {
+  const v = c.values;
+  const parts: string[] = [];
+  if (typeof v.distance === 'number')
+    parts.push(
+      `${fmtDistance(v.distance, units).value} ${fmtDistance(v.distance, units).unit} from anchor`,
+    );
+  if (typeof v.sog === 'number')
+    parts.push(`SOG ${fmtSpeed(v.sog, units).value} ${fmtSpeed(v.sog, units).unit}`);
+  if (typeof v.ageS === 'number') parts.push(`${v.ageS} s without a fix`);
+  if (typeof v.disconnectedS === 'number') parts.push(`${v.disconnectedS} s`);
+  if (typeof v.depth === 'number')
+    parts.push(`depth ${fmtDepth(v.depth, units).value} ${fmtDepth(v.depth, units).unit}`);
+  if (typeof v.zone === 'string') parts.push(v.zone);
+  if (typeof v.temp === 'number' && typeof v.band === 'string') parts.push(v.band);
+  return parts.join(' · ');
+}
+function DepthDialog(p: {
+  units: Units;
+  onClose: () => void;
+  onSubmit: (depthM: number) => Promise<boolean>;
+}) {
+  const [text, setText] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const feet = p.units.depth === 'ft';
+  return (
+    <Dialog
+      title="Depth at the anchor"
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" className="btn" onClick={p.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={async () => {
+              const n = Number(text);
+              if (!Number.isFinite(n) || n < 0) {
+                setErr('Enter the depth as a number.');
+                return;
+              }
+              const m = feet ? n * 0.3048 : p.units.depth === 'fathoms' ? n * 1.8288 : n;
+              if (await p.onSubmit(m)) p.onClose();
+            }}
+          >
+            Use this depth
+          </button>
+        </>
+      }
+    >
+      <p>
+        The sounder had no reading when the anchor went down. Enter the depth below the waterline
+        now; it is used for the whole session.
+      </p>
+      <div className="field">
+        <label htmlFor="depth-in">Depth ({p.units.depth})</label>
+        <input
+          id="depth-in"
+          type="number"
+          inputMode="decimal"
+          step="0.1"
+          min="0"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+        />
+      </div>
+      {err ? <p className="error">{err}</p> : null}
+    </Dialog>
+  );
+}
+
+function TideDialog(p: {
+  units: Units;
+  current: number;
+  onClose: () => void;
+  onSubmit: (tideRangeM: number) => Promise<boolean>;
+}) {
+  const feet = p.units.distance === 'ft';
+  const [text, setText] = useState(
+    String(feet ? Math.round((p.current / 0.3048) * 10) / 10 : Math.round(p.current * 10) / 10),
+  );
+  return (
+    <Dialog
+      title="Expected tide range"
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" className="btn" onClick={p.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={async () => {
+              const n = Number(text);
+              if (!Number.isFinite(n) || n < 0) return;
+              if (await p.onSubmit(feet ? n * 0.3048 : n)) p.onClose();
+            }}
+          >
+            Apply
+          </button>
+        </>
+      }
+    >
+      <p>
+        How much the water will rise or fall during the stay. The circle widens for the low-water
+        swing and the scope shown is for high water. Zero if unknown.
+      </p>
+      <div className="field">
+        <label htmlFor="tide-in">Range ({feet ? 'ft' : 'm'})</label>
+        <input
+          id="tide-in"
+          type="number"
+          inputMode="decimal"
+          step="0.1"
+          min="0"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+        />
+      </div>
+    </Dialog>
+  );
+}

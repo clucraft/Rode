@@ -15,12 +15,16 @@
     "@rode/core": "workspace:*",
     "@rode/protocol": "workspace:*",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-router": "^7.18.3"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.0.1",
     "typescript": "catalog:",
     "vite": "^8.3.0",
     "vitest": "catalog:"

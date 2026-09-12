@@ -1,40 +1,80 @@
-import { useEffect, useState } from 'react';
-import type { HealthResponse } from '@rode/protocol';
+import { useEffect } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
+import { useAuth } from './api/auth.js';
+import { store } from './api/store.js';
+import { setNightSchedule, useTheme } from './lib/theme.js';
+import { Shell } from './components/Shell.jsx';
+import { Login, Setup } from './screens/Auth.jsx';
+import { Watch } from './screens/Watch.jsx';
+import { Now } from './screens/Now.jsx';
+import { Traffic } from './screens/Traffic.jsx';
+import { History, SessionDetail } from './screens/History.jsx';
+import {
+  About,
+  BoatGeometry,
+  Display,
+  SettingsIndex,
+  SettingsLayout,
+  Source,
+  Thresholds,
+} from './screens/Settings.jsx';
+import { Diagnostics, Security, Tokens, Users, Zones } from './screens/SettingsAdmin.jsx';
+import { Notifications } from './screens/Notifications.jsx';
 
-/**
- * Phase 0 placeholder. The real Watch screen arrives in phase 6; this exists
- * so the build, dev proxy and health wiring are exercised from day one.
+/*
+ * Routing and the auth gate. Order of gates: setup wizard (no admin yet) →
+ * sign-in → the app. The live store starts only once signed in.
  */
+
 export function App() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const auth = useAuth();
+  useTheme();
 
   useEffect(() => {
-    let cancelled = false;
-    fetch('/healthz')
-      .then((r) =>
-        r.ok ? (r.json() as Promise<HealthResponse>) : Promise.reject(new Error(r.statusText)),
-      )
-      .then((h) => {
-        if (!cancelled) setHealth(h);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (auth.settings) setNightSchedule(auth.settings.nightMode);
+  }, [auth.settings]);
+
+  useEffect(() => {
+    if (auth.user) store.start();
+    else store.stop();
+  }, [auth.user]);
+
+  if (!auth.loaded) {
+    return (
+      <div className="auth-shell">
+        <p className="muted">Connecting to the boat…</p>
+      </div>
+    );
+  }
+  if (auth.needsSetup) return <Setup />;
+  if (!auth.user) return <Login />;
 
   return (
-    <main className="shell">
-      <h1>Rode</h1>
-      <p className="tagline">Anchor watch and boat monitor</p>
-      <p className="status" aria-live="polite">
-        {health ? `server ${health.version} · up ${Math.round(health.uptimeMs / 1000)} s` : null}
-        {error ? `server unreachable: ${error}` : null}
-        {!health && !error ? 'connecting…' : null}
-      </p>
-    </main>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Shell />}>
+          <Route index element={<Watch />} />
+          <Route path="now" element={<Now />} />
+          <Route path="traffic" element={<Traffic />} />
+          <Route path="history" element={<History />} />
+          <Route path="history/:id" element={<SessionDetail />} />
+          <Route path="settings" element={<SettingsLayout />}>
+            <Route index element={<SettingsIndex />} />
+            <Route path="thresholds" element={<Thresholds />} />
+            <Route path="boat" element={<BoatGeometry />} />
+            <Route path="display" element={<Display />} />
+            <Route path="source" element={<Source />} />
+            <Route path="notifications" element={<Notifications />} />
+            <Route path="zones" element={<Zones />} />
+            <Route path="users" element={<Users />} />
+            <Route path="security" element={<Security />} />
+            <Route path="tokens" element={<Tokens />} />
+            <Route path="diagnostics" element={<Diagnostics />} />
+            <Route path="about" element={<About />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   );
 }

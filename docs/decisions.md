@@ -246,3 +246,39 @@ likewise. Passwords are argon2id (19 MiB, t=2).
 A Home Assistant or Grafana token is a Bearer credential with no CSRF
 protection, so it is confined to safe methods and to crew-level endpoints.
 It cannot ack, drop or reconfigure anything.
+
+## 6.1 — Day mode is light, not dark
+
+**Context.** Marine apps default to dark themes. The spec asks for colours
+that survive direct sunlight on deck _and_ a red-shifted night mode.
+
+**Decision.** Day is warm paper with black ink and saturated marks; night is
+black with everything red-shifted. There is no third "dark" theme.
+
+**Why.** In direct sun a light background with black text is far more
+legible than any dark theme; at 0300 only red-on-black preserves dark
+adaptation. A dark-grey theme serves neither environment well. Alarm state
+is carried by shape (octagon, triangle, ring), border weight, motion and
+text, so it survives both palettes and colour-blindness.
+
+## 6.2 — Alarm audio shows the real armed state
+
+The "Enable alarm sound on this device" control reflects whether the
+AudioContext is actually running, checked via `onstatechange`, not a stored
+preference. After a reload it says "tap to re-arm" rather than pretending.
+A safety app that looks armed but is muted is the worst outcome.
+
+## 6.3 — The browser never computes alarm state
+
+`api/store.ts` mirrors the server's `FullState` and applies deltas. Distance,
+scope, radius, conditions and snooze all come from the server; the web app
+only formats them. The one client-side computation is unit conversion in
+`lib/format.ts`. When the link drops the UI shows the last known state with
+an OFFLINE banner and disables every command.
+
+## 6.4 — react-router, no state library, no CSS framework
+
+Five screens do not justify Redux; a single `useSyncExternalStore` store
+mirrors the WebSocket. Plain CSS with custom properties keeps the instrument
+aesthetic under control and the bundle at ~108 KB gzipped, which matters on
+a metered cellular link.
