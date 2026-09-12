@@ -12,3 +12,5 @@ export * from './nmea/parse.js';
 export * from './nmea/encode.js';
 export * from './nmea/ais.js';
 export * from './sim/index.js';
+export * from './sources/index.js';
+export * from './sim/server.js';

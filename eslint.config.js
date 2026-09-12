@@ -41,6 +41,8 @@ export default tseslint.config(
       // Numeric formatting and math code legitimately uses these.
       '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
       '@typescript-eslint/no-non-null-assertion': 'error',
+      // Stylistic; fights the `new Promise((resolve) => x.close(resolve))` idiom.
+      '@typescript-eslint/no-confusing-void-expression': 'off',
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
@@ -51,6 +53,11 @@ export default tseslint.config(
   {
     files: ['apps/web/**'],
     languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    // Command-line entry points print to stdout by design.
+    files: ['**/cli.ts', '**/scripts/**'],
+    rules: { 'no-console': 'off' },
   },
   {
     // Config and test files: relax rules that only add noise there.

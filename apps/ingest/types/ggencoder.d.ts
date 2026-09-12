@@ -71,3 +71,8 @@ declare module 'ggencoder' {
     nmea: string;
   }
 }
+
+declare module 'ggencoder' {
+  const GGencoder: { AisDecode: typeof AisDecode; AisEncode: typeof AisEncode };
+  export default GGencoder;
+}

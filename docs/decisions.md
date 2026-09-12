@@ -153,3 +153,33 @@ cannot know, and the GPS-staleness alarm is already shouting. A wind detector
 fed 3 kn of apparent wind must clear: the vane is spinning freely and its
 angle means nothing. The two cases are different and the type makes the
 caller choose.
+
+## 3.1 — Idle timeout on the TCP source is a liveness check, not a nicety
+
+**Context.** WiFi between the box and the Cortex drops routinely. The TCP
+stack does not notice for minutes: the socket stays "connected" and simply
+never delivers another byte. That is a silent failure of exactly the kind
+the spec's prior art warns about.
+
+**Decision.** `TcpSource` destroys and reconnects any socket that is silent
+for 15 s (configurable). A Cortex emits several sentences a second, so
+silence is a broken link. UDP has no connection at all; there, "connected"
+literally means "datagrams are arriving".
+
+## 3.2 — The simulator is a fake hub, not a fake adapter
+
+**Decision.** `rode-sim serve` is a TCP server emitting the scenario's NMEA
+stream; `SimulatorSource` exists for in-process use but the compose dev
+stack points the _real_ `nmea0183-tcp` adapter at the fake hub. When a
+scenario says the hub is down, the fake hub closes its listener and drops
+every client.
+
+**Why.** The reconnect path is where the interesting bugs live. Simulating
+"disconnected" inside an adapter tests nothing about the adapter.
+
+## 3.3 — Recording format is `<epochMs>\t<sentence>`
+
+One line per sentence, tab-separated, append-only. Trivially greppable,
+replayable with original timing, and a bare NMEA log from any other tool
+(no tab) still replays at a fixed rate. Real recordings from the boat become
+test fixtures without conversion.

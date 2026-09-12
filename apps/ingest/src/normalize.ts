@@ -216,7 +216,26 @@ export class Normalizer {
     this.emit({ type: 'sentence', raw: s.raw, parsed: parsed.sentence });
   }
 
-  /** Apply an already-parsed sentence (used by the Signal K adapter's NMEA passthrough and tests). */
+  /**
+   * Apply a field directly, bypassing NMEA. Used by the Signal K adapter,
+   * which already speaks SI. Angles are normalised the same way the sentence
+   * path does.
+   */
+  applyField(name: FieldName, value: number | LatLon, timestamp: number, source: string): void {
+    let v = value;
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v)) return;
+      if (name === 'cog' || name === 'heading' || name === 'twd') v = normaliseAngle(v);
+      if (name === 'awa' || name === 'twa') v = normaliseRelativeAngle(v);
+    } else if (name !== 'position') {
+      return;
+    }
+    const field: Field<number | LatLon> = { value: v, timestamp, source, stale: false };
+    this.fields.set(name, field);
+    this.emit({ type: 'field', name, field });
+  }
+
+  /** Apply an already-parsed sentence (used by tests and the replay tooling). */
   apply(p: ParsedSentence, raw: string, now: number, source: string): void {
     const set = <N extends FieldName>(name: N, value: FieldValue<N> | null): void => {
       if (value === null) return;

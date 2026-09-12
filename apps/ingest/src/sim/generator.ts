@@ -1,4 +1,4 @@
-import { AisEncode } from 'ggencoder';
+import ggencoder from 'ggencoder';
 import { mpsToKnots, radToDeg } from '@rode/core';
 import {
   encodeDPT,
@@ -16,6 +16,8 @@ import {
   type XdrItem,
 } from '../nmea/encode.js';
 import type { BoatState } from './scenario.js';
+
+const { AisEncode } = ggencoder;
 
 /** Simulated sounder: transducer 0.3 m below the waterline, reported via DPT offset. */
 const TRANSDUCER_DEPTH = 0.3;

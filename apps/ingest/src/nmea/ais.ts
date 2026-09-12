@@ -1,5 +1,9 @@
-import { AisDecode } from 'ggencoder';
+import ggencoder, { type AisDecodeResult } from 'ggencoder';
 import { degToRad, knotsToMps } from '@rode/core';
+
+// CommonJS module with a dynamic export object: named ESM imports do not
+// resolve under Node, so destructure the default.
+const { AisDecode } = ggencoder;
 
 /**
  * AIS target tracking. Decoding is delegated to ggencoder (maintained; handles
@@ -59,7 +63,7 @@ export class AisTracker {
    * complete message was decoded, otherwise null (partial or unsupported).
    */
   feed(rawSentence: string, own: boolean, now: number): AisUpdate | null {
-    let d: AisDecode;
+    let d: AisDecodeResult;
     try {
       d = new AisDecode(rawSentence, this.session);
     } catch {
