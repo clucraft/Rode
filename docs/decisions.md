@@ -380,3 +380,76 @@ clock while reporting `unsynced`. The source is part of the time view and
 shows as a pill in the status strip. GPS dates before 2020 are rejected so
 a receiver without a fix cannot poison it. Tests inject a fixed clock and
 bypass the fallback.
+
+# 11 — Field feedback round (2026-09-12)
+
+## 11.1 — A manual circle is an override on the session, not a config change
+
+**Context.** The skipper wants to drag the alarm and warning rings on the
+view, or type them, and optionally set them independently.
+
+**Decision.** `AnchorSession.radiusOverride` holds `{swingRadius, warnRadius,
+mode}`; `effectiveRadii()` picks it over the computed geometry, and the tick
+watches whatever that returns. The computed geometry is kept alongside so
+"Reset to computed" is exact and the session row still explains itself.
+`linked` mode re-derives the warning ring from `warnDistance` whenever the
+setting changes; `independent` freezes both numbers. Range 5–2000 m and
+warn ≤ alarm are enforced in the engine, not the UI. Position detectors
+restart on a change so a smaller circle alarms after its full hold, not the
+instant it is drawn under the boat. Marina sessions take the same override.
+
+## 11.2 — Settings changes reach the running session via a `recompute` command
+
+Hold times and thresholds were already read live each tick; the circle was
+derived once at set from the margins, warn distance and bow-roller height.
+`settings:changed` for `alarm` or `boat` now issues `{type: 'recompute'}`,
+which re-derives geometry (keeping the HDOP term from set: the fix cannot
+change retroactively), updates a marina radius, and logs
+`geometry-recomputed` only when something actually moved. Going through a
+command keeps the engine pure and the change in the event log.
+
+## 11.3 — Display preferences live on the boat
+
+Track hours, AIS toggle, view mode, background imagery, fit-all and the
+previous-anchor switch were `localStorage`; a slider moved on the phone was
+invisible on the laptop. They are now a `prefs` settings key, crew-writable
+through `PATCH /api/prefs`, carried in every snapshot and pushed as a
+websocket delta. The client applies a change at once and flushes after
+300 ms so a slider is one request, not one per pixel; a pending local value
+wins over an echo from the server until it has been sent.
+
+## 11.4 — Imagery is served by Rode itself, not by MapLibre
+
+**Context.** "Sat imagery behind the anchor graphic." The existing `tiles`
+profile runs tileserver-gl for MapLibre vector charts, which most people
+will not set up, and MapLibre is a separate view from the polar one.
+
+**Decision.** Raster tiles are drawn as `<image>` elements under the polar
+SVG, clipped to the rose. Tile corners are projected onto the same local
+tangent plane as everything else; over a few hundred metres the mercator
+distortion is far below a pixel. Two source kinds, up to five: an MBTiles
+file read directly with better-sqlite3 (read-only; TMS row flip; format
+sniffed from bytes so mislabelled files still work; vector files rejected
+with a reason), or an online XYZ/quadkey template that the _server_ fetches
+and caches under `/data/tile-cache/<id>/z/x/y.tile` with write-then-rename.
+Failed fetches are remembered for a minute so an offline boat does not
+hammer the link. "Cache around the boat" prefetches a box at several zooms
+with four workers and a 4000-tile cap. The browser only ever sees
+`/api/tiles/:id/z/x/y` behind the session, so keys and provider URLs stay
+on the box. Presets: Esri (no key), Google and Bing tile servers (unofficial
+endpoints; the user carries the provider terms and the UI says so).
+
+## 11.5 — The polar view scrolls the page unless a drag mode is on
+
+`touch-action: none` on the SVG made most of a phone screen unscrollable.
+It is now `pan-y` and switches to `none` only while nudging the anchor,
+drawing a zone or editing the rings; those modes are explicit buttons.
+
+## 11.6 — The desktop rail overlapped the top bar because of a leftover `bottom: 0`
+
+The phone rule pins `.nav` with `bottom/left/right: 0`; the ≥900 px rule
+switched it to `position: sticky; top: 0` without clearing them. Chrome
+resolves sticky against the grid container, so on any page taller than the
+viewport the `bottom: 0` constraint dragged the rail up over the header;
+short pages were unaffected, which is why only Watch and Traffic showed it.
+The rule now resets the offsets and `align-self: start`.

@@ -125,11 +125,54 @@ Also worth setting: the sounder's transducer depth below the waterline
    m, rode 41 m, scope 5.7:1". If it does not arrive, fix that before you
    sleep. That is the point of it.
 7. **Weigh anchor** asks for confirmation. One accidental tap cannot end a
-   session.
+   session. The old anchor stays on the view, greyed, until the next drop.
+
+The view also shows the apparent wind as an arrow on the outer ring (where it
+blows from, needs a heading), with wind speed and depth in the corner; both
+radii are written on their rings and listed as readouts.
+
+**Edit alarm radius** replaces the computed circle for the rest of the
+session: drag either ring on the view or type the numbers. Unchecked, the
+warning ring follows the alarm ring at the configured warn distance (either
+field moves the other); tick _Ignore configured radius scale_ to set the two
+independently. _Reset to computed_ goes back. Changing a threshold or the
+boat geometry in Settings re-derives the circle of the session that is
+running; you do not have to weigh and drop again.
+
+**Add exclusion zone** opens the zone editor right there; drawing works on
+top of the imagery, so a reef you can see is a reef you can fence.
+
+The track slider, AIS toggle, background choice and the Traffic screen's
+fit-all switch are stored on the boat, so a phone and a laptop always show
+the same thing.
 
 The banner shows one of: NOT WATCHING · ANCHOR DOWN · WATCHING · WARNING ·
 ALARM. Acknowledging an alarm silences audio for the snooze period; it never
 clears the condition, and it re-fires louder if still alarming.
+
+## Imagery under the anchor view
+
+Settings › **Imagery** takes up to five raster sources, picked from the
+**Background** menu on Watch and Traffic:
+
+- **MBTiles file** — copy a raster `.mbtiles` (jpg/png/webp tiles; vector
+  `.pbf` will not draw) into the box's `/data/mbtiles` directory
+  (`docker cp anchorage.mbtiles rode:/data/mbtiles/`, or the `rode-tiles`
+  volume). Works with no internet at all. Make one from your own charts or
+  satellite exports with e.g. QGIS, `gdal_translate -of MBTILES`, or
+  SAS Planet.
+- **Online** — Esri World Imagery, Google Satellite and Bing Aerial presets,
+  or any `{z}/{x}/{y}` / `{q}` template. The _server_ fetches tiles as you
+  look at them and keeps every one on disk under `/data/tile-cache`, so
+  what you looked at with the cell link up is still there when it drops.
+  **Cache around the boat** pulls 1.5 km at zoom 13–19 ahead of time (a
+  few hundred tiles). Phones never talk to the provider. Provider terms
+  apply to you, not to Rode; the Google and Bing endpoints are the
+  unofficial tile servers.
+
+The polar view stays a north-up local plane; tiles are placed by projecting
+their corners, which over an anchorage is exact to well under a pixel. At
+night the imagery is red-shifted with the rest of the screen.
 
 ## Notifications
 
