@@ -130,3 +130,63 @@ export function run(
 export function at(bearingDeg: number, distance: number): LatLon {
   return destination(ANCHOR, degToRad(bearingDeg), distance);
 }
+
+// ---------------------------------------------------------------- authenticated client
+
+import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
+
+export interface Client {
+  cookie: string;
+  csrf: string;
+  user: { id: string; username: string; role: string };
+  /** Inject with session cookie and CSRF header attached. */
+  req: (opts: InjectOptions) => Promise<LightMyRequestResponse>;
+}
+
+export const ADMIN = {
+  username: 'skipper',
+  password: 'correct horse battery staple',
+  displayName: 'Skipper',
+};
+
+function cookieFrom(res: LightMyRequestResponse): string {
+  const raw = res.headers['set-cookie'];
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  return (first ?? '').split(';')[0] ?? '';
+}
+
+export function clientFor(
+  app: FastifyInstance,
+  cookie: string,
+  csrf: string,
+  user: Client['user'],
+): Client {
+  return {
+    cookie,
+    csrf,
+    user,
+    req: (opts) =>
+      app.inject({
+        ...opts,
+        headers: { cookie, 'x-csrf-token': csrf, ...(opts.headers ?? {}) },
+      }),
+  };
+}
+
+/** Run the setup wizard and return a signed-in admin client. */
+export async function setupAdmin(app: FastifyInstance): Promise<Client> {
+  const res = await app.inject({ method: 'POST', url: '/api/setup', payload: ADMIN });
+  if (res.statusCode !== 200) throw new Error(`setup failed: ${res.statusCode} ${res.body}`);
+  const body = res.json<{ user: Client['user']; csrfToken: string }>();
+  return clientFor(app, cookieFrom(res), body.csrfToken, body.user);
+}
+
+export async function signIn(
+  app: FastifyInstance,
+  creds: { username: string; password: string; totp?: string; recoveryCode?: string },
+): Promise<{ res: LightMyRequestResponse; client: Client | null }> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: creds });
+  if (res.statusCode !== 200) return { res, client: null };
+  const body = res.json<{ user: Client['user']; csrfToken: string }>();
+  return { res, client: clientFor(app, cookieFrom(res), body.csrfToken, body.user) };
+}

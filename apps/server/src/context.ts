@@ -7,6 +7,7 @@ import type { Repos } from './db/repos.js';
 import type { EngineHost } from './engine/host.js';
 import type { IngestManager } from './ingest/manager.js';
 import type { Diagnostics } from './diagnostics.js';
+import type { AuthService } from './auth/service.js';
 import type { SettingsService } from './settings.js';
 import type { StateDeps } from './state.js';
 
@@ -20,6 +21,7 @@ export interface AppContext {
   engine: EngineHost;
   ingest: IngestManager;
   diagnostics: Diagnostics;
+  auth: AuthService;
   state: StateDeps;
   version: string;
   bootedAt: number;

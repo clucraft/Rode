@@ -5,6 +5,8 @@ import { envSourceOverrides, type Config } from './config.js';
 import { openDatabase, type Db } from './db/database.js';
 import { createRepos, type Repos } from './db/repos.js';
 import { Diagnostics } from './diagnostics.js';
+import { createAuthRepos } from './auth/repos.js';
+import { AuthService } from './auth/service.js';
 import { EngineHost } from './engine/host.js';
 import { IngestManager } from './ingest/manager.js';
 import { Housekeeping, SampleWriter } from './jobs/samples.js';
@@ -85,6 +87,14 @@ export function createServices(opts: ServiceOptions): Services {
   });
 
   const diagnostics = new Diagnostics(ingest.normalizer, now);
+  const auth = new AuthService({
+    repos: createAuthRepos(db),
+    events: repos.events,
+    bus,
+    log,
+    issuer: () => `Rode (${settings.view().boatName})`,
+    now,
+  });
   const sampleWriter = new SampleWriter({
     normalizer: ingest.normalizer,
     engine,
@@ -129,6 +139,7 @@ export function createServices(opts: ServiceOptions): Services {
     engine,
     ingest,
     diagnostics,
+    auth,
     state,
     version: config.RODE_VERSION,
     bootedAt,
@@ -141,7 +152,10 @@ export function createServices(opts: ServiceOptions): Services {
       diagnostics.start();
       sampleWriter.start();
       housekeeping.start();
-      distanceTimer = setInterval(() => engine.recordDistance(), 60_000);
+      distanceTimer = setInterval(() => {
+        engine.recordDistance();
+        auth.housekeeping();
+      }, 60_000);
       distanceTimer.unref();
       if (opts.startIngest !== false) await ingest.apply(settings.source());
       log.info(

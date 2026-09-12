@@ -1,4 +1,6 @@
 import Fastify, { LogController, type FastifyInstance } from 'fastify';
+import fastifyCookie from '@fastify/cookie';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { existsSync } from 'node:fs';
@@ -6,7 +8,9 @@ import path from 'node:path';
 import type { HealthResponse } from '@rode/protocol';
 import type { Config } from './config.js';
 import type { AppContext } from './context.js';
+import { authenticate, configureGuard, setupGate } from './auth/guard.js';
 import { anchorRoutes } from './routes/anchor.js';
+import { authRoutes } from './routes/auth.js';
 import { diagnosticsRoutes } from './routes/diagnostics.js';
 import { settingsRoutes } from './routes/settings.js';
 import { stateRoutes } from './routes/state.js';
@@ -105,6 +109,13 @@ export function readinessFor(ctx: AppContext): () => Record<string, 'ok' | 'fail
 /** Register the API, WebSocket and (in production) the static web app. */
 export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<void> {
   await app.register(fastifyWebsocket, { options: { maxPayload: 64 * 1024 } });
+  await app.register(fastifyCookie);
+  // A generous global ceiling; login and setup carry their own tighter limits.
+  await app.register(fastifyRateLimit, { global: true, max: 600, timeWindow: '1 minute' });
+
+  configureGuard(ctx.auth);
+  app.addHook('onRequest', authenticate);
+  app.addHook('onRequest', setupGate);
 
   // Security headers on everything. HSTS only when TLS is terminated for us.
   app.addHook('onSend', (req, reply, payload, done) => {
@@ -134,6 +145,7 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
     done(null, payload);
   });
 
+  authRoutes(app, ctx, ctx.auth);
   anchorRoutes(app, ctx);
   stateRoutes(app, ctx);
   zoneRoutes(app, ctx);

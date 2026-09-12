@@ -108,4 +108,64 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: 'auth',
+    sql: `
+      CREATE TABLE users (
+        id             TEXT PRIMARY KEY,
+        username       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        display_name   TEXT NOT NULL,
+        role           TEXT NOT NULL CHECK (role IN ('admin', 'crew')),
+        password_hash  TEXT NOT NULL,
+        totp_secret    TEXT,
+        totp_enabled   INTEGER NOT NULL DEFAULT 0,
+        -- JSON array of sha256 hex digests of unused recovery codes.
+        recovery_codes TEXT NOT NULL DEFAULT '[]',
+        disabled       INTEGER NOT NULL DEFAULT 0,
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL
+      );
+
+      -- Server-side sessions. The cookie carries a random id; only its hash
+      -- is stored so a copy of the database cannot be replayed.
+      CREATE TABLE auth_sessions (
+        id_hash      TEXT PRIMARY KEY,
+        public_id    TEXT NOT NULL UNIQUE,
+        user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        csrf_token   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        expires_at   INTEGER NOT NULL,
+        ip           TEXT,
+        user_agent   TEXT,
+        revoked_at   INTEGER
+      );
+      CREATE INDEX auth_sessions_user ON auth_sessions (user_id);
+
+      -- Long-lived read-only tokens for Home Assistant / Grafana. Shown once.
+      CREATE TABLE api_tokens (
+        id           TEXT PRIMARY KEY,
+        user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name         TEXT NOT NULL,
+        token_hash   TEXT NOT NULL UNIQUE,
+        scope        TEXT NOT NULL DEFAULT 'read',
+        created_at   INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at   INTEGER
+      );
+
+      -- Login attempts feed the lockout logic and the event log.
+      CREATE TABLE login_attempts (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        at       INTEGER NOT NULL,
+        username TEXT NOT NULL COLLATE NOCASE,
+        ip       TEXT,
+        success  INTEGER NOT NULL,
+        reason   TEXT
+      );
+      CREATE INDEX login_attempts_user ON login_attempts (username, at);
+      CREATE INDEX login_attempts_ip ON login_attempts (ip, at);
+    `,
+  },
 ];

@@ -214,3 +214,35 @@ readiness check used `Date.now()` and declared a perfectly healthy engine
 stalled because its last tick was "in 2026". The bug was in a test, but the
 class of bug (two clocks in one process) is exactly what bites on a Pi with
 no RTC when GPS time arrives.
+
+## 5.1 — Session cookie `Secure` flag follows `RODE_TLS`, not the environment
+
+**Decision.** The cookie is `HttpOnly; SameSite=Lax`, and `Secure` only when
+`RODE_TLS=true`.
+
+**Why.** The typical deployment is a Tailscale address over plain HTTP on a
+private network. A `Secure` cookie on `http://` is silently dropped by the
+browser and the login "succeeds" then immediately forgets you: a silent
+failure of exactly the kind this project exists to avoid. Owners who
+terminate TLS (Caddy profile, Tailscale certs) set `RODE_TLS=true` and get
+`Secure` plus HSTS.
+
+## 5.2 — TOTP implemented on `node:crypto`, not a library
+
+Thirty lines of RFC 6238 (HMAC-SHA1, base32) with the published test vector
+in the suite, versus another dependency in a safety-critical container. The
+verification window is ±1 step because a Pi with no NTP and a phone can
+disagree by a minute.
+
+## 5.3 — Session ids and API tokens are stored hashed
+
+The database is on the boat and gets copied around for backups. A copied
+`rode.db` must not contain anything that logs you in. Sessions and tokens
+are 256-bit random values whose SHA-256 is the primary key; recovery codes
+likewise. Passwords are argon2id (19 MiB, t=2).
+
+## 5.4 — API tokens read what crew reads, nothing else
+
+A Home Assistant or Grafana token is a Bearer credential with no CSRF
+protection, so it is confined to safe methods and to crew-level endpoints.
+It cannot ack, drop or reconfigure anything.
