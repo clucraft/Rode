@@ -116,3 +116,40 @@ developers without `make` are not stranded.
 the alarm engine's heartbeat counter is advancing. Docker's healthcheck uses
 `readyz` so a wedged engine, alive but not evaluating, gets restarted. This is
 the "process is up but not doing its job" failure the spec's prior art hit.
+
+## 1.1 — Lat/lon in decimal degrees; every other angle in radians
+
+**Context.** The spec says "radians internally". Applied literally that
+includes latitude and longitude.
+
+**Decision.** Positions are `{ lat, lon }` in decimal degrees (WGS84).
+Heading, COG, bearings and wind angles are radians.
+
+**Why.** Every map library, NMEA sentence, chart and human takes lat/lon in
+degrees; storing radians in SQLite makes debugging at 0300 harder for no
+numerical gain. The angles where deg/rad mix-ups actually bite (wind angle vs.
+window, heading rotation of the antenna offset) are the ones held in radians,
+and the geodesy functions convert internally.
+
+## 1.2 — WARNING and ALARM are derived, not stored
+
+**Decision.** The persisted phase is one of IDLE / DROPPING / SET / MARINA.
+WARNING and ALARM are computed from the set of active conditions, each of
+which carries its own severity, timestamp and the values that caused it.
+
+**Why.** It makes "ack silences audio but never clears the condition" a
+structural property rather than a rule to remember: an ack touches the ack
+record; the conditions stay; the derived state stays ALARM. It also means
+several conditions can coexist (GPS stale _and_ outside the circle) and each
+clears on its own evidence, with its own event in the log.
+
+## 1.3 — Every detector holds on missing data, suppresses on bad data
+
+**Decision.** `sustainedStep` takes `true | false | null`. `null` freezes the
+detector (no accumulation, no clearing); `false` counts toward clearing.
+
+**Why.** A position detector fed no position must not fire _or_ clear: it
+cannot know, and the GPS-staleness alarm is already shouting. A wind detector
+fed 3 kn of apparent wind must clear: the vane is spinning freely and its
+angle means nothing. The two cases are different and the type makes the
+caller choose.
