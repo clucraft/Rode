@@ -1,0 +1,86 @@
+# Rode — production compose. Development overrides live in
+# docker-compose.override.yml and are applied automatically by `docker compose`.
+#
+#   docker compose up -d                 # core stack
+#   docker compose --profile tiles up -d # + offline chart tiles
+#   docker compose --profile mqtt up -d  # + MQTT broker for HA / siren
+
+name: rode
+
+x-logging: &logging # An SD card must not fill with logs.
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  rode:
+    image: ${RODE_IMAGE:-ghcr.io/clucraft/rode}:${RODE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+      args:
+        RODE_VERSION: ${RODE_TAG:-dev}
+    container_name: rode
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      RODE_DATA_DIR: /data
+    ports:
+      - '${RODE_PORT:-8080}:8080'
+    volumes:
+      - rode-data:/data
+    # Hardening: read-only root, no privilege escalation, tmpfs for scratch.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/readyz']
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging: *logging
+
+  tiles:
+    profiles: ['tiles']
+    image: maptiler/tileserver-gl:v5.3.1
+    container_name: rode-tiles
+    restart: unless-stopped
+    command: ['--port', '8081', '--public_url', '${RODE_TILES_PUBLIC_URL:-http://localhost:8081}']
+    volumes:
+      - rode-tiles:/data:ro
+    ports:
+      - '${RODE_TILES_PORT:-8081}:8081'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8081/health']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+  mosquitto:
+    profiles: ['mqtt']
+    image: eclipse-mosquitto:2.0.22
+    container_name: rode-mqtt
+    restart: unless-stopped
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - rode-mqtt:/mosquitto/data
+    ports:
+      - '${RODE_MQTT_PORT:-1883}:1883'
+    logging: *logging
+
+volumes:
+  # SQLite database, config snapshot, recordings. Back up with `make backup`.
+  rode-data:
+  # Drop .mbtiles files here (see README → Offline charts).
+  rode-tiles:
+  rode-mqtt:

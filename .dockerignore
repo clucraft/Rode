@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/coverage
+**/.vitest
+.git
+.github
+data
+recordings
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+docs
+*.md
+!README.md

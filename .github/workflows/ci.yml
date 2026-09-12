@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # version is read from package.json#packageManager
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  docker:
+    name: Docker build (amd64 smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/server.Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: rode:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test /healthz
+        run: |
+          docker run -d --rm --name rode-ci -p 18080:8080 rode:ci
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18080/healthz; then echo; ok=1; break; fi
+            sleep 1
+          done
+          docker logs rode-ci
+          docker stop rode-ci
+          test "$ok" = "1"

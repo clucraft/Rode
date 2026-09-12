@@ -1,0 +1,78 @@
+# Development overrides — applied automatically by `docker compose up`.
+# For production use `docker compose -f docker-compose.yml up -d`.
+#
+# In dev the server runs from source with tsx watch, the web app runs the Vite
+# dev server, and a `sim` container plays a fake Cortex on the compose network
+# so the real nmea0183-tcp adapter path is exercised.
+
+# The source tree is bind-mounted, but pnpm's node_modules are Linux symlinks
+# created at image build time. Mask every node_modules directory with an
+# anonymous volume so the host's (possibly Windows) copies never leak in.
+x-dev-volumes: &dev-volumes
+  - .:/app
+  - /app/node_modules
+  - /app/apps/ingest/node_modules
+  - /app/apps/server/node_modules
+  - /app/apps/web/node_modules
+  - /app/packages/core/node_modules
+  - /app/packages/protocol/node_modules
+
+services:
+  rode:
+    build:
+      target: deps
+    image: rode-dev
+    command: ['pnpm', '--filter', '@rode/server', 'dev']
+    environment:
+      NODE_ENV: development
+      RODE_LOG_LEVEL: debug
+      RODE_DATA_DIR: /data
+      RODE_SOURCE: nmea0183-tcp
+      RODE_NMEA_HOST: sim
+      RODE_NMEA_PORT: 39150
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/ingest/node_modules
+      - /app/apps/server/node_modules
+      - /app/apps/web/node_modules
+      - /app/packages/core/node_modules
+      - /app/packages/protocol/node_modules
+      - rode-data-dev:/data
+    # Source is bind-mounted and pnpm writes to it: undo the production hardening.
+    read_only: false
+    tmpfs: !reset []
+    cap_drop: !reset []
+    ports:
+      - '${RODE_PORT:-8080}:8080'
+
+  web:
+    # Reuses the image built by `rode` above; compose builds before it starts.
+    image: rode-dev
+    pull_policy: never
+    command: ['pnpm', '--filter', '@rode/web', 'dev', '--host', '0.0.0.0']
+    volumes: *dev-volumes
+    ports:
+      - '5173:5173'
+    depends_on:
+      - rode
+
+  sim:
+    image: rode-dev
+    pull_policy: never
+    command:
+      - pnpm
+      - --filter
+      - '@rode/ingest'
+      - sim
+      - serve
+      - --scenario
+      - '${SIM_SCENARIO:-quiet-night}'
+      - --speed
+      - '${SIM_SPEED:-1}'
+    volumes: *dev-volumes
+    expose:
+      - '39150'
+
+volumes:
+  rode-data-dev:

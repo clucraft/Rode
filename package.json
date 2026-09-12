@@ -1,0 +1,39 @@
+{
+  "name": "rode",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-hosted boat monitor and anchor watch for vessels with a Vesper Cortex M1",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.28.1",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter ./apps/server --filter ./apps/web dev",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
+    "clean": "pnpm -r exec rm -rf dist node_modules && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.6",
+    "typescript": "catalog:",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+*.tsbuildinfo
+apps/web/dev-dist/
+
+# runtime data
+data/
+*.db
+*.db-wal
+*.db-shm
+recordings/*.nmea
+!recordings/.gitkeep
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# editor / os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# test / coverage
+coverage/
+.vitest/
+
+# logs
+*.log

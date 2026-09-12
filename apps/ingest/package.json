@@ -1,0 +1,28 @@
+{
+  "name": "@rode/ingest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NMEA acquisition, normalization, simulator, record/replay",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "rode-sim": "./src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "sim": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@rode/core": "workspace:*",
+    "@rode/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
