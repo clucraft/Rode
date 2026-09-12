@@ -5,6 +5,9 @@ import { refreshAuth, useAuth } from '../api/auth.js';
 import { useStore } from '../api/store.js';
 import { fmtDateTime, fmtDuration, fmtLatLon } from '../lib/format.js';
 import { ConfirmDialog, Dialog } from '../components/common.js';
+import { PolarView } from '../components/PolarView.jsx';
+import { useAuth as useAuthForUnits } from '../api/auth.js';
+import { DEFAULT_UNITS } from '../lib/format.js';
 import { StrengthMeter } from './Auth.jsx';
 import { Panel } from './Settings.jsx';
 
@@ -82,7 +85,14 @@ function ZoneEditor(p: { zone: ZoneRecord | null; onClose: () => void; onSaved: 
   );
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [draw, setDraw] = useState(false);
+  const { settings } = useAuthForUnits();
   const here = state?.watch.live.boat ?? state?.instruments.position?.value ?? null;
+  const drawn = points
+    .map((q) => ({ lat: Number(q.lat), lon: Number(q.lon) }))
+    .filter(
+      (q) => Number.isFinite(q.lat) && Number.isFinite(q.lon) && (q.lat !== 0 || q.lon !== 0),
+    );
 
   const save = async () => {
     setErr(null);
@@ -141,9 +151,58 @@ function ZoneEditor(p: { zone: ZoneRecord | null; onClose: () => void; onSaved: 
         Enabled
       </label>
       <p className="small muted">
-        Points in decimal degrees, in order around the shape. Chart drawing arrives with the map;
-        until then, "use here" fills a row from the boat's position.
+        Draw on the view around the boat (tap to add points, in order around the shape), or type
+        decimal degrees. "here" fills a row from the boat's position.
       </p>
+      <div className="row">
+        <button
+          type="button"
+          className={`btn ${draw ? 'primary' : ''}`}
+          aria-pressed={draw}
+          disabled={!here}
+          onClick={() => setDraw((d) => !d)}
+        >
+          {draw ? 'Done drawing' : 'Draw on the view'}
+        </button>
+        {draw ? (
+          <button
+            type="button"
+            className="btn quiet"
+            onClick={() =>
+              setPoints([
+                { lat: '', lon: '' },
+                { lat: '', lon: '' },
+                { lat: '', lon: '' },
+              ])
+            }
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      {draw && here ? (
+        <PolarView
+          state="IDLE"
+          anchor={state?.watch.session?.anchor ?? null}
+          swingRadius={state?.watch.session?.geometry?.swingRadius ?? null}
+          warnRadius={null}
+          boat={here}
+          headingRad={null}
+          positionStale={false}
+          track={[]}
+          zones={[]}
+          ais={[]}
+          units={settings?.units ?? DEFAULT_UNITS}
+          drawing={drawn}
+          onTap={(pos) =>
+            setPoints((ps) => {
+              const next = { lat: pos.lat.toFixed(6), lon: pos.lon.toFixed(6) };
+              const empty = ps.findIndex((q) => q.lat === '' && q.lon === '');
+              return empty === -1 ? [...ps, next] : ps.map((q, i) => (i === empty ? next : q));
+            })
+          }
+        />
+      ) : null}
       {points.map((q, i) => (
         <div className="row" key={i}>
           <input

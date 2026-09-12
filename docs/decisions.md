@@ -317,3 +317,16 @@ critical event, notifies, and calls `engine.stop(); engine.start()`.
 `/readyz` has already gone 503, so if that does not take, Docker restarts
 the container. Two layers, because the second one costs a rehydration and a
 notification of its own.
+
+## 8.1 — `index.html` is never cached; hashed assets are cached forever
+
+Found by running the app: the shell was served with a one-hour cache and a
+phone kept the old bundle against a newer server. Vite fingerprints
+everything under `assets/`, so those get `immutable`; the shell, manifest
+and service worker get `no-cache` so they always revalidate.
+
+## 8.2 — Marina monitors live under the same thresholds page
+
+Fridge/freezer bands, battery holds and the solar window are edited next
+to the anchor thresholds, each with its default and reason, converted to
+the boat's temperature unit at the edge. They only run in marina mode.

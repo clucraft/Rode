@@ -1,5 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { ALARM_CONFIG_DOCS, DEFAULT_ALARM_CONFIG, DEFAULT_MARINA_CONFIG } from '@rode/core';
+import {
+  ALARM_CONFIG_DOCS,
+  DEFAULT_ALARM_CONFIG,
+  DEFAULT_MARINA_CONFIG,
+  MARINA_CONFIG_DOCS,
+} from '@rode/core';
 import { SCENARIOS } from '@rode/ingest';
 import { SettingsPatch } from '@rode/protocol';
 import { actorName, parseBody, type AppContext } from '../context.js';
@@ -14,6 +19,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppContext): void {
     alarm: ALARM_CONFIG_DOCS,
     alarmDefaults: DEFAULT_ALARM_CONFIG,
     marinaDefaults: DEFAULT_MARINA_CONFIG,
+    marina: MARINA_CONFIG_DOCS,
     scenarios: SCENARIOS.map((s) => ({ id: s.id, name: s.name, description: s.description })),
   }));
 

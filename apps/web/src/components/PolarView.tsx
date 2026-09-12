@@ -50,6 +50,9 @@ export interface PolarViewProps {
   onNudge?: (anchor: LatLon) => void;
   nudgeMode?: boolean;
   showAis?: boolean;
+  /** Drawing mode: taps append vertices to this polygon and call onTap. */
+  drawing?: LatLon[] | undefined;
+  onTap?: ((pos: LatLon) => void) | undefined;
 }
 
 const SIZE = 600; // SVG viewBox
@@ -128,9 +131,15 @@ export function PolarView(p: PolarViewProps) {
   };
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!p.nudgeMode || !anchorSvg) return;
     const pt = svgPoint(e);
     if (!pt) return;
+    if (p.onTap && origin && !p.nudgeMode) {
+      // Ignore taps on the zoom controls' corner.
+      if (pt.x > SIZE - 80 && pt.y < 100) return;
+      p.onTap(fromLocalXY(origin, { x: (pt.x - HALF) / scale, y: (HALF - pt.y) / scale }));
+      return;
+    }
+    if (!p.nudgeMode || !anchorSvg) return;
     if (Math.hypot(pt.x - anchorSvg.x, pt.y - anchorSvg.y) < 40) {
       e.currentTarget.setPointerCapture(e.pointerId);
       setDragging(pt);
@@ -242,6 +251,36 @@ export function PolarView(p: PolarViewProps) {
               })
           : null}
 
+        {/* polygon being drawn */}
+        {p.drawing && p.drawing.length > 0
+          ? (() => {
+              const pts = p.drawing
+                .map((v) => toSvg(v))
+                .filter((v): v is { x: number; y: number } => v !== null);
+              return (
+                <g className="drawing">
+                  {pts.length >= 3 ? (
+                    <polygon
+                      className="zone"
+                      points={pts.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(' ')}
+                    />
+                  ) : pts.length === 2 ? (
+                    <line
+                      className="rode-line"
+                      x1={pts[0]?.x}
+                      y1={pts[0]?.y}
+                      x2={pts[1]?.x}
+                      y2={pts[1]?.y}
+                    />
+                  ) : null}
+                  {pts.map((q, i) => (
+                    <circle key={i} className="boat" cx={q.x} cy={q.y} r={5} />
+                  ))}
+                </g>
+              );
+            })()
+          : null}
+
         {/* swing circle + warning ring */}
         {anchorDraw && p.swingRadius !== null ? (
           <>
@@ -336,6 +375,7 @@ export function PolarView(p: PolarViewProps) {
         <span className="scale">rings {fmtRing(ringM)}</span>
         {p.positionStale ? <span>position stale</span> : null}
         {p.nudgeMode ? <span>drag the anchor</span> : null}
+        {p.onTap ? <span>tap to add a point</span> : null}
       </div>
       <div className="polar-controls">
         <button

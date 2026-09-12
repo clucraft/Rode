@@ -280,3 +280,98 @@ export function stepMarina(
 function roundK(v: number | null): number | null {
   return v === null ? null : Math.round(v * 10) / 10;
 }
+
+/** Flat, dotted paths into MarinaConfig with display units and reasons, for the settings UI. */
+export interface MarinaDoc {
+  path: string;
+  label: string;
+  unit: 'K' | 'Kdelta' | 'ms' | 'fraction' | 'hour' | 'W';
+  why: string;
+}
+
+export const MARINA_CONFIG_DOCS: MarinaDoc[] = [
+  {
+    path: 'fridge.warmAbove',
+    label: 'Fridge warm above',
+    unit: 'K',
+    why: 'Above 8 °C food is not safe for long. A warning, because a door left open for a moment gets here too.',
+  },
+  {
+    path: 'fridge.failingAbove',
+    label: 'Fridge failing above',
+    unit: 'K',
+    why: 'A running fridge at 12 °C is dying: compressor, gas or a breaker. Critical.',
+  },
+  {
+    path: 'fridge.offWithinOfAmbient',
+    label: 'Fridge "off" band',
+    unit: 'Kdelta',
+    why: 'Within this many degrees of the cabin the box was deliberately shut down, not failing. Reported as a transition so a failure that drifts to ambient does not hide.',
+  },
+  {
+    path: 'freezer.warmAbove',
+    label: 'Freezer warm above',
+    unit: 'K',
+    why: 'A freezer above -12 °C is losing its hold. Warning.',
+  },
+  {
+    path: 'freezer.failingAbove',
+    label: 'Freezer failing above',
+    unit: 'K',
+    why: 'Above -5 °C the contents are thawing. Critical.',
+  },
+  {
+    path: 'freezer.offWithinOfAmbient',
+    label: 'Freezer "off" band',
+    unit: 'Kdelta',
+    why: 'Same trap as the fridge: a failed freezer eventually reads ambient and looks switched off.',
+  },
+  {
+    path: 'bandHoldMs',
+    label: 'Band hold',
+    unit: 'ms',
+    why: 'A temperature must sit in a band this long before the change is reported. Loading provisions spikes the box for a few minutes; a failure does not recover.',
+  },
+  {
+    path: 'socWarnBelow',
+    label: 'Battery warning below',
+    unit: 'fraction',
+    why: 'The house bank dips overnight and recovers by mid-morning. This is only reported after the hold below, so a normal night passes.',
+  },
+  {
+    path: 'socCriticalBelow',
+    label: 'Battery critical below',
+    unit: 'fraction',
+    why: 'Below this the bank is being damaged and the fridge is next to go.',
+  },
+  {
+    path: 'socHoldMs',
+    label: 'Battery hold',
+    unit: 'ms',
+    why: 'Twenty minutes rides through the last hour before sunrise; a bank that stays low is a charging problem.',
+  },
+  {
+    path: 'solarWindow.startHour',
+    label: 'Solar window start',
+    unit: 'hour',
+    why: 'Local hour from which the panels should be producing on any day of the year.',
+  },
+  {
+    path: 'solarWindow.endHour',
+    label: 'Solar window end',
+    unit: 'hour',
+    why: 'Local hour until which production is expected.',
+  },
+  {
+    path: 'solarMinWatts',
+    label: 'Solar minimum',
+    unit: 'W',
+    why: 'Below this inside the window counts as no yield: a controller, breaker or DVCC fault, actionable days before the batteries get low.',
+  },
+  {
+    path: 'solarHoldMs',
+    label: 'Solar hold',
+    unit: 'ms',
+    why: 'Two hours of nothing at midday is not a cloud.',
+  },
+];

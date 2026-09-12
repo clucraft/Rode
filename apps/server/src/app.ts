@@ -162,8 +162,17 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
       root: webDir,
       prefix: '/',
       wildcard: false,
-      maxAge: '1h',
-      immutable: false,
+      // Vite fingerprints everything under assets/: cache those forever. The
+      // shell (index.html, manifest, service worker) must always revalidate or
+      // a phone keeps running last month's app against this month's server.
+      setHeaders: (res, filePath) => {
+        const p = filePath.split('\\').join('/');
+        if (p.includes('/assets/')) {
+          void res.header('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          void res.header('Cache-Control', 'no-cache');
+        }
+      },
     });
   }
 

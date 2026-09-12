@@ -11,10 +11,14 @@ import {
   fmtDepth,
   fmtDistance,
   fmtDuration,
+  fmtPercent,
   fmtRelativeAngle,
   fmtRode,
   fmtScope,
   fmtSpeed,
+  fmtTemp,
+  fmtVoltage,
+  fmtWatts,
 } from '../lib/format.js';
 import { useLocal } from '../lib/useLocal.js';
 import { useWakeLock } from '../lib/wakelock.js';
@@ -314,6 +318,43 @@ export function Watch() {
               stale={positionStale}
             />
             <Readout label="Radius" value={fmtDistance(radius, units)} />
+            {session?.mode === 'marina' ? (
+              <>
+                <Readout
+                  label="House bank"
+                  value={fmtPercent(instruments.batterySoc?.value)}
+                  stale={instruments.batterySoc?.stale ?? true}
+                  sub={
+                    instruments.batteryVoltage
+                      ? `${fmtVoltage(instruments.batteryVoltage.value).value} V`
+                      : undefined
+                  }
+                />
+                <Readout
+                  label="Solar"
+                  value={fmtWatts(instruments.solarPower?.value)}
+                  stale={instruments.solarPower?.stale ?? true}
+                />
+                <Readout
+                  label="Fridge"
+                  value={fmtTemp(instruments.fridgeTemp?.value, units)}
+                  stale={instruments.fridgeTemp?.stale ?? true}
+                  sub={
+                    watch?.marina.fridge.band === 'unknown' ? undefined : watch?.marina.fridge.band
+                  }
+                />
+                <Readout
+                  label="Freezer"
+                  value={fmtTemp(instruments.freezerTemp?.value, units)}
+                  stale={instruments.freezerTemp?.stale ?? true}
+                  sub={
+                    watch?.marina.freezer.band === 'unknown'
+                      ? undefined
+                      : watch?.marina.freezer.band
+                  }
+                />
+              </>
+            ) : null}
             {geometry ? (
               <>
                 <Readout
