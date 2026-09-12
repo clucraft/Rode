@@ -14,6 +14,11 @@ import {
   pointInPolygon,
   projectPosition,
   toLocalXY,
+  metresPerPixel,
+  quadkey,
+  tileAt,
+  tileOrigin,
+  tilesCovering,
 } from './geodesy.js';
 import { degToRad } from './units.js';
 import type { LatLon } from './types.js';
@@ -176,5 +181,33 @@ describe('polygons', () => {
       }),
       { numRuns: 300 },
     );
+  });
+});
+
+describe('web mercator tiles', () => {
+  it('matches the well-known tile for a position and round-trips its origin', () => {
+    // Bermuda at z 12: y = floor((1 - ln(tan φ + sec φ)/π)/2 · 4096) = 1659.
+    const t = tileAt({ lat: 32.29, lon: -64.83 }, 12);
+    expect(t).toEqual({ z: 12, x: 1310, y: 1659 });
+    const o = tileOrigin(t);
+    expect(o.lat).toBeGreaterThan(32.29);
+    expect(o.lon).toBeLessThanOrEqual(-64.83);
+    const back = tileAt(o, 12);
+    expect(back).toEqual(t);
+  });
+
+  it('quadkeys follow the Bing example', () => {
+    expect(quadkey({ z: 3, x: 3, y: 5 })).toBe('213');
+    expect(quadkey({ z: 1, x: 0, y: 0 })).toBe('0');
+  });
+
+  it('a covering box grows with zoom and clamps at the poles', () => {
+    const c = { lat: 32.29, lon: -64.83 };
+    const a = tilesCovering(c, 500, 15);
+    const b = tilesCovering(c, 500, 18);
+    expect(b.x1 - b.x0).toBeGreaterThan(a.x1 - a.x0);
+    const polar = tilesCovering({ lat: 89.9, lon: 0 }, 5000, 3);
+    expect(polar.y0).toBeGreaterThanOrEqual(0);
+    expect(metresPerPixel(0, 0)).toBeCloseTo(156543, 0);
   });
 });

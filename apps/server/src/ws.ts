@@ -104,6 +104,10 @@ export function websocketRoutes(app: FastifyInstance, ctx: AppContext): void {
       delta.health = next.health;
       any = true;
     }
+    if (JSON.stringify(next.prefs) !== JSON.stringify(c.last.prefs)) {
+      delta.prefs = next.prefs;
+      any = true;
+    }
     c.last = next;
     if (any) send(c, delta);
   };
@@ -129,6 +133,11 @@ export function websocketRoutes(app: FastifyInstance, ctx: AppContext): void {
     ) {
       for (const c of clients) flush(c);
     }
+  });
+
+  // A slider moved on one phone should show on the other without waiting.
+  ctx.bus.on('settings:changed', ({ keys }) => {
+    if (keys.includes('prefs')) for (const c of clients) flush(c);
   });
 
   app.get('/ws', { websocket: true, preHandler: requireRole('crew') }, (socket) => {

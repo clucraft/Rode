@@ -26,6 +26,13 @@ export const WeighRequest = z.object({
   confirm: z.literal(true),
 });
 export const AckRequest = z.object({});
+/** Manual circle. Metres; the engine validates the band and range. */
+export const SetRadiusRequest = z.object({
+  swingRadius: z.number().positive().optional(),
+  warnRadius: z.number().min(0).optional(),
+  mode: z.enum(['linked', 'independent']),
+});
+export type SetRadiusRequest = z.infer<typeof SetRadiusRequest>;
 
 export const CommandResponse = z.object({
   ok: z.boolean(),
@@ -166,3 +173,123 @@ export const TrackPoint = z.object({
   distance: z.number().nullable(),
 });
 export type TrackPoint = z.infer<typeof TrackPoint>;
+
+// ---------------------------------------------------------------- view preferences
+
+/**
+ * How the Watch and Traffic screens are shown. Stored on the server, not in
+ * the browser, so a slider moved on the phone is what the laptop shows too.
+ * Crew may change these; they carry no safety weight.
+ */
+export const ViewPrefs = z.object({
+  /** Track tail on the Watch screen, hours. */
+  trackHours: z.number().min(0.25).max(72).default(6),
+  showAis: z.boolean().default(true),
+  watchView: z.enum(['polar', 'chart']).default('polar'),
+  /** Imagery source id drawn under the polar view, or null for none. */
+  imagerySource: z.string().max(40).nullable().default(null),
+  /** Keep the previous session's anchor visible, greyed, after weighing. */
+  showPreviousAnchor: z.boolean().default(true),
+  /** Traffic screen: fit every AIS target instead of the swing circle. */
+  trafficFitAll: z.boolean().default(true),
+});
+export type ViewPrefs = z.infer<typeof ViewPrefs>;
+export const ViewPrefsPatch = ViewPrefs.partial();
+export type ViewPrefsPatch = z.infer<typeof ViewPrefsPatch>;
+
+// ---------------------------------------------------------------- imagery
+
+export const MAX_IMAGERY_SOURCES = 5;
+
+/**
+ * A raster background for the polar view: either an MBTiles file on the box
+ * or an online XYZ template that the server fetches and caches on disk.
+ */
+export const ImagerySourceInput = z.object({
+  name: z.string().min(1).max(60),
+  kind: z.enum(['mbtiles', 'xyz']),
+  /** mbtiles: path of the file, absolute or relative to the MBTiles directory. */
+  path: z.string().max(400).optional(),
+  /**
+   * xyz: template with {z} {x} {y}, or {q} for a Bing quadkey; {s} picks a
+   * subdomain from `subdomains`. Only http(s).
+   */
+  urlTemplate: z.string().max(600).optional(),
+  subdomains: z.string().max(20).optional(),
+  minZoom: z.number().int().min(0).max(22).default(0),
+  maxZoom: z.number().int().min(0).max(22).default(19),
+  attribution: z.string().max(200).optional(),
+  enabled: z.boolean().default(true),
+});
+export type ImagerySourceInput = z.infer<typeof ImagerySourceInput>;
+
+export const ImagerySource = ImagerySourceInput.extend({
+  id: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ImagerySource = z.infer<typeof ImagerySource>;
+
+/** What the server knows about a source right now; shown on the Imagery screen. */
+export interface ImageryStatus {
+  id: string;
+  ok: boolean;
+  message: string;
+  /** mbtiles: from the file's metadata table. */
+  format?: string;
+  bounds?: [number, number, number, number];
+  zoomRange?: [number, number];
+  tileCount?: number;
+  /** xyz: what is on disk. */
+  cachedTiles?: number;
+  cachedBytes?: number;
+  /** Background download around the boat, if one is running or finished. */
+  prefetch?: { running: boolean; done: number; total: number; failed: number; startedAt: number };
+}
+
+export const PrefetchRequest = z.object({
+  /** Centre of the box to download. Defaults to the boat's position. */
+  centre: LatLonSchema.optional(),
+  /** Half-width of the box, metres. */
+  radius: z.number().min(100).max(5000).default(1000),
+  minZoom: z.number().int().min(0).max(22).default(14),
+  maxZoom: z.number().int().min(0).max(22).default(19),
+});
+export type PrefetchRequest = z.infer<typeof PrefetchRequest>;
+
+/** Named starting points for the Imagery screen's "add online source" menu. */
+export const IMAGERY_PRESETS: readonly (ImagerySourceInput & { note: string })[] = [
+  {
+    name: 'Esri World Imagery',
+    kind: 'xyz',
+    urlTemplate:
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    minZoom: 0,
+    maxZoom: 19,
+    attribution: 'Esri, Maxar, Earthstar Geographics',
+    enabled: true,
+    note: 'No key needed. Good coverage of coasts and anchorages.',
+  },
+  {
+    name: 'Google Satellite',
+    kind: 'xyz',
+    urlTemplate: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    subdomains: '0123',
+    minZoom: 0,
+    maxZoom: 20,
+    attribution: 'Google',
+    enabled: true,
+    note: 'Unofficial tile endpoint; subject to Google\u2019s terms.',
+  },
+  {
+    name: 'Bing Aerial',
+    kind: 'xyz',
+    urlTemplate: 'https://ecn.t{s}.tiles.virtualearth.net/tiles/a{q}.jpeg?g=1',
+    subdomains: '0123',
+    minZoom: 1,
+    maxZoom: 19,
+    attribution: 'Microsoft',
+    enabled: true,
+    note: 'Quadkey tiles; subject to Microsoft\u2019s terms.',
+  },
+];

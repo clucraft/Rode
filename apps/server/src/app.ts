@@ -13,6 +13,7 @@ import { adminRoutes } from './routes/admin.js';
 import { anchorRoutes } from './routes/anchor.js';
 import { authRoutes } from './routes/auth.js';
 import { diagnosticsRoutes } from './routes/diagnostics.js';
+import { imageryRoutes } from './routes/imagery.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { settingsRoutes } from './routes/settings.js';
 import { stateRoutes } from './routes/state.js';
@@ -155,6 +156,7 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
   diagnosticsRoutes(app, ctx);
   notificationRoutes(app, ctx);
   adminRoutes(app, ctx);
+  imageryRoutes(app, ctx);
   websocketRoutes(app, ctx);
 
   const webDir = ctx.config.RODE_WEB_DIR;
@@ -163,7 +165,9 @@ export async function mountApp(app: FastifyInstance, ctx: AppContext): Promise<v
     await app.register(fastifyStatic, {
       root: webDir,
       prefix: '/',
-      wildcard: false,
+      // Resolve files at request time, not at boot: a web build dropped in
+      // while the server runs must not fall through to index.html.
+      wildcard: true,
       // Vite fingerprints everything under assets/: cache those forever. The
       // shell (index.html, manifest, service worker) must always revalidate or
       // a phone keeps running last month's app against this month's server.

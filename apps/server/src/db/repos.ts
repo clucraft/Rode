@@ -195,7 +195,12 @@ export class SessionsRepo extends Repo {
       set_lon: s.setPosition?.lon ?? null,
       set_at: s.setAt,
       tide_range: s.tideRange,
-      geometry: s.geometry ? JSON.stringify(s.geometry) : null,
+      // The manual circle rides along inside the geometry JSON so History can
+      // show what was actually watched without a schema change.
+      geometry:
+        s.geometry || s.radiusOverride
+          ? JSON.stringify({ ...(s.geometry ?? {}), radiusOverride: s.radiusOverride ?? null })
+          : null,
       marina_lat: s.marinaCentre?.lat ?? null,
       marina_lon: s.marinaCentre?.lon ?? null,
       marina_radius: s.marinaRadius,

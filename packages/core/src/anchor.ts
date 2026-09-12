@@ -71,6 +71,20 @@ export interface ActiveCondition {
 
 export type DepthSource = 'sounder' | 'manual';
 
+/**
+ * A skipper-set circle that replaces the computed one for the rest of the
+ * session. `linked` keeps the warning band at the configured `warnDistance`
+ * inside the alarm circle whenever either radius or the setting changes;
+ * `independent` freezes both values exactly as entered.
+ */
+export interface RadiusOverride {
+  swingRadius: number;
+  warnRadius: number;
+  mode: 'linked' | 'independent';
+  at: number;
+  by: string;
+}
+
 export interface AnchorSession {
   id: string;
   mode: SessionMode;
@@ -92,10 +106,43 @@ export interface AnchorSession {
   setAt: number | null;
   tideRange: number;
   geometry: AnchorGeometry | null;
+  /** Manual circle, if the skipper has edited it; the computed geometry is kept alongside. */
+  radiusOverride: RadiusOverride | null;
 
   // ---- marina mode
   marinaCentre: LatLon | null;
   marinaRadius: number | null;
+}
+
+/** The circle the engine is actually watching: the override if set, else the computed one. */
+export interface EffectiveRadii {
+  swingRadius: number;
+  warnRadius: number;
+  manual: boolean;
+}
+
+export function effectiveRadii(
+  session: AnchorSession | null,
+  config: Pick<AlarmConfig, 'marinaRadius' | 'warnDistance'>,
+): EffectiveRadii | null {
+  if (!session) return null;
+  if (session.radiusOverride) {
+    return {
+      swingRadius: session.radiusOverride.swingRadius,
+      warnRadius: session.radiusOverride.warnRadius,
+      manual: true,
+    };
+  }
+  if (session.mode === 'marina') {
+    const r = session.marinaRadius ?? config.marinaRadius;
+    return { swingRadius: r, warnRadius: Math.max(0, r - config.warnDistance), manual: false };
+  }
+  if (!session.geometry) return null;
+  return {
+    swingRadius: session.geometry.swingRadius,
+    warnRadius: session.geometry.warnRadius,
+    manual: false,
+  };
 }
 
 export interface Acknowledgement {
@@ -160,6 +207,22 @@ export type EngineEvent = { at: number } & (
   | { type: 'anchor-set'; sessionId: string; setPosition: LatLon; geometry: AnchorGeometry }
   | { type: 'anchor-nudged'; sessionId: string; from: LatLon; to: LatLon; geometry: AnchorGeometry }
   | { type: 'tide-updated'; sessionId: string; tideRange: number; geometry: AnchorGeometry }
+  | {
+      type: 'radius-overridden';
+      sessionId: string;
+      override: RadiusOverride;
+      computed: { swingRadius: number; warnRadius: number } | null;
+    }
+  | { type: 'radius-override-cleared'; sessionId: string; by: string }
+  | {
+      /** Settings changed under an active session; derived values were recomputed. */
+      type: 'geometry-recomputed';
+      sessionId: string;
+      geometry: AnchorGeometry | null;
+      marinaRadius: number | null;
+      swingRadius: number;
+      warnRadius: number;
+    }
   | { type: 'marina-started'; sessionId: string; centre: LatLon; radius: number }
   | { type: 'session-ended'; sessionId: string; mode: SessionMode; durationMs: number; by: string }
   | { type: 'condition-raised'; condition: ActiveCondition }
@@ -198,6 +261,23 @@ export type Command =
   | { type: 'set' }
   | { type: 'nudge'; anchor: LatLon }
   | { type: 'set-tide'; tideRange: number }
+  | {
+      /**
+       * Replace the watched circle. In linked mode one radius is enough and the
+       * other follows at the configured warn distance; independent mode takes
+       * both as given (each defaults to its current effective value).
+       */
+      type: 'set-radius';
+      swingRadius?: number;
+      warnRadius?: number;
+      mode: 'linked' | 'independent';
+      by: string;
+    }
+  | { type: 'clear-radius'; by: string }
+  | {
+      /** Settings changed: re-derive geometry and marina radius for the active session. */
+      type: 'recompute';
+    }
   | { type: 'weigh'; by?: string }
   | { type: 'ack'; by: string }
   | { type: 'marina' };
@@ -254,6 +334,10 @@ export function createWatchState(now: number): WatchState {
 export function rehydrateWatchState(persisted: WatchState, now: number): WatchState {
   return {
     ...persisted,
+    // Sessions persisted before manual radii existed have no override field.
+    session: persisted.session
+      ? { ...persisted.session, radiusOverride: persisted.session.radiusOverride ?? null }
+      : null,
     observingSince: now,
     lastPositionAt: null,
     live: emptyLive(),
@@ -297,6 +381,12 @@ export function applyCommand(state: WatchState, cmd: Command, ctx: EngineContext
       return nudge(state, cmd, ctx);
     case 'set-tide':
       return setTide(state, cmd, ctx);
+    case 'set-radius':
+      return setRadius(state, cmd, ctx);
+    case 'clear-radius':
+      return clearRadius(state, cmd, ctx);
+    case 'recompute':
+      return recompute(state, ctx);
     case 'weigh':
       return weigh(state, cmd, ctx);
     case 'ack':
@@ -373,6 +463,7 @@ function drop(state: WatchState, cmd: { manualDepth?: number }, ctx: EngineConte
     setAt: null,
     tideRange: 0,
     geometry: null,
+    radiusOverride: null,
     marinaCentre: null,
     marinaRadius: null,
   };
@@ -553,6 +644,168 @@ function setTide(state: WatchState, cmd: { tideRange: number }, ctx: EngineConte
   return { state: { ...state, session }, events };
 }
 
+/** Smallest circle worth watching: below this the GPS noise alone would alarm. */
+const MIN_MANUAL_RADIUS = 5;
+/** Largest: anything bigger is a typo, not an anchorage. */
+const MAX_MANUAL_RADIUS = 2000;
+
+function setRadius(
+  state: WatchState,
+  cmd: { swingRadius?: number; warnRadius?: number; mode: 'linked' | 'independent'; by: string },
+  ctx: EngineContext,
+): StepResult {
+  const { now, config } = ctx;
+  const session = state.session;
+  if (!session || (state.phase !== 'SET' && state.phase !== 'MARINA')) {
+    return reject(
+      state,
+      'set-radius',
+      'not-watching',
+      'The circle can be edited once the anchor is set.',
+      now,
+    );
+  }
+  const current = effectiveRadii(session, config);
+  const given = (v: number | undefined): number | null =>
+    v !== undefined && Number.isFinite(v) ? v : null;
+  const swingIn = given(cmd.swingRadius);
+  const warnIn = given(cmd.warnRadius);
+  if (swingIn === null && warnIn === null) {
+    return reject(state, 'set-radius', 'nothing-given', 'Enter a radius.', now);
+  }
+
+  let swingRadius: number;
+  let warnRadius: number;
+  if (cmd.mode === 'linked') {
+    // One value drives both; the band stays warnDistance wide.
+    swingRadius = swingIn ?? (warnIn ?? 0) + config.warnDistance;
+    warnRadius = Math.max(0, swingRadius - config.warnDistance);
+  } else {
+    swingRadius = swingIn ?? current?.swingRadius ?? NaN;
+    warnRadius = warnIn ?? current?.warnRadius ?? NaN;
+  }
+  if (!Number.isFinite(swingRadius) || !Number.isFinite(warnRadius)) {
+    return reject(state, 'set-radius', 'invalid-radius', 'That is not a valid radius.', now);
+  }
+  if (swingRadius < MIN_MANUAL_RADIUS || swingRadius > MAX_MANUAL_RADIUS) {
+    return reject(
+      state,
+      'set-radius',
+      'radius-out-of-range',
+      `The alarm radius must be between ${String(MIN_MANUAL_RADIUS)} and ${String(MAX_MANUAL_RADIUS)} m.`,
+      now,
+    );
+  }
+  if (warnRadius < 0 || warnRadius > swingRadius) {
+    return reject(
+      state,
+      'set-radius',
+      'warn-outside-alarm',
+      'The warning radius must be inside the alarm radius.',
+      now,
+    );
+  }
+
+  const override: RadiusOverride = { swingRadius, warnRadius, mode: cmd.mode, at: now, by: cmd.by };
+  const computed = computedRadii(session, config);
+  const next: AnchorSession = { ...session, radiusOverride: override };
+  const events: EngineEvent[] = [
+    { at: now, type: 'radius-overridden', sessionId: session.id, override, computed },
+  ];
+  // The circle moved under the boat; restart the position timers so a smaller
+  // circle alarms after its full hold, not instantly.
+  return {
+    state: {
+      ...state,
+      session: next,
+      detectors: {
+        ...state.detectors,
+        positionWarning: sustainedInit(),
+        positionOutside: sustainedInit(),
+      },
+    },
+    events,
+  };
+}
+
+function clearRadius(state: WatchState, cmd: { by: string }, ctx: EngineContext): StepResult {
+  const { now } = ctx;
+  const session = state.session;
+  if (!session?.radiusOverride) return { state, events: [] };
+  const next: AnchorSession = { ...session, radiusOverride: null };
+  return {
+    state: {
+      ...state,
+      session: next,
+      detectors: {
+        ...state.detectors,
+        positionWarning: sustainedInit(),
+        positionOutside: sustainedInit(),
+      },
+    },
+    events: [{ at: now, type: 'radius-override-cleared', sessionId: session.id, by: cmd.by }],
+  };
+}
+
+/** What the settings alone would give, ignoring any override. */
+function computedRadii(
+  session: AnchorSession,
+  config: AlarmConfig,
+): { swingRadius: number; warnRadius: number } | null {
+  const r = effectiveRadii({ ...session, radiusOverride: null }, config);
+  return r ? { swingRadius: r.swingRadius, warnRadius: r.warnRadius } : null;
+}
+
+/**
+ * Settings changed while a session is active. Thresholds and hold times are
+ * read live every tick, but the circle is derived once at set from the boat
+ * geometry, margins and warn distance, so re-derive it here. A linked
+ * override follows the new warn distance; an independent one is left alone.
+ */
+function recompute(state: WatchState, ctx: EngineContext): StepResult {
+  const { now, config } = ctx;
+  const session = state.session;
+  if (!session || state.phase === 'IDLE') return { state, events: [] };
+  const next: AnchorSession = { ...session };
+  if (session.mode === 'anchor' && session.geometry && session.anchor && session.setPosition) {
+    next.geometry = geometryFor(session, ctx);
+  }
+  if (session.mode === 'marina') next.marinaRadius = config.marinaRadius;
+  if (session.radiusOverride?.mode === 'linked') {
+    next.radiusOverride = {
+      ...session.radiusOverride,
+      warnRadius: Math.max(0, session.radiusOverride.swingRadius - config.warnDistance),
+    };
+  }
+  const before = effectiveRadii(session, config);
+  const after = effectiveRadii(next, config);
+  const geometrySame =
+    next.geometry === session.geometry ||
+    (next.geometry !== null &&
+      session.geometry !== null &&
+      next.geometry.swingRadius === session.geometry.swingRadius &&
+      next.geometry.warnRadius === session.geometry.warnRadius &&
+      next.geometry.scopeRatio === session.geometry.scopeRatio);
+  const unchanged =
+    geometrySame &&
+    next.marinaRadius === session.marinaRadius &&
+    before?.swingRadius === after?.swingRadius &&
+    before?.warnRadius === after?.warnRadius;
+  if (unchanged) return { state, events: [] };
+  const events: EngineEvent[] = [
+    {
+      at: now,
+      type: 'geometry-recomputed',
+      sessionId: session.id,
+      geometry: next.geometry,
+      marinaRadius: next.marinaRadius,
+      swingRadius: after?.swingRadius ?? NaN,
+      warnRadius: after?.warnRadius ?? NaN,
+    },
+  ];
+  return { state: { ...state, session: next }, events };
+}
+
 function weigh(state: WatchState, cmd: { by?: string }, ctx: EngineContext): StepResult {
   const { now } = ctx;
   if (state.phase === 'IDLE' || !state.session) return { state, events: [] };
@@ -645,6 +898,7 @@ function marina(state: WatchState, ctx: EngineContext): StepResult {
     setAt: null,
     tideRange: 0,
     geometry: null,
+    radiusOverride: null,
     marinaCentre: boat.position,
     marinaRadius: config.marinaRadius,
   };
@@ -743,14 +997,9 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
       ? session.marinaCentre
       : session.anchor
     : null;
-  const radius =
-    session?.mode === 'marina'
-      ? (session.marinaRadius ?? config.marinaRadius)
-      : (session?.geometry?.swingRadius ?? null);
-  const warnRadius =
-    session?.mode === 'marina'
-      ? Math.max(0, (session.marinaRadius ?? config.marinaRadius) - config.warnDistance)
-      : (session?.geometry?.warnRadius ?? null);
+  const radii = effectiveRadii(session, config);
+  const radius = radii?.swingRadius ?? null;
+  const warnRadius = radii?.warnRadius ?? null;
 
   if (centre && boat) {
     live.distanceFromAnchor = distanceM(centre, boat.position);

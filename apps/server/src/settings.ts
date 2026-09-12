@@ -7,7 +7,18 @@ import {
   type BoatGeometry,
   type MarinaConfig,
 } from '@rode/core';
-import { SettingsView, type SettingsPatch, type SourceSettings, type Units } from '@rode/protocol';
+import {
+  ImagerySource,
+  MAX_IMAGERY_SOURCES,
+  SettingsView,
+  ViewPrefs,
+  type ImagerySourceInput,
+  type SettingsPatch,
+  type SourceSettings,
+  type Units,
+  type ViewPrefsPatch,
+} from '@rode/protocol';
+import { z } from 'zod';
 import type { Bus } from './bus.js';
 import type { SettingsRepo } from './db/repos.js';
 
@@ -49,8 +60,12 @@ function defined<T extends object>(obj: T | undefined): Partial<T> {
   return out;
 }
 
+const ImageryList = z.array(ImagerySource).max(MAX_IMAGERY_SOURCES);
+
 export class SettingsService {
   private cache: SettingsView;
+  private prefsCache: ViewPrefs;
+  private imageryCache: ImagerySource[];
 
   constructor(
     private readonly repo: SettingsRepo,
@@ -59,6 +74,18 @@ export class SettingsService {
     private readonly envOverrides: Partial<SettingsPatch> = {},
   ) {
     this.cache = this.load();
+    this.prefsCache = this.loadPrefs();
+    this.imageryCache = this.loadImagery();
+  }
+
+  private loadPrefs(): ViewPrefs {
+    const r = ViewPrefs.safeParse(this.repo.get('prefs') ?? {});
+    return r.success ? r.data : ViewPrefs.parse({});
+  }
+
+  private loadImagery(): ImagerySource[] {
+    const r = ImageryList.safeParse(this.repo.get('imagery') ?? []);
+    return r.success ? r.data : [];
   }
 
   private load(): SettingsView {
@@ -150,6 +177,57 @@ export class SettingsService {
       this.bus.emit('settings:changed', { keys: changed });
     }
     return changed;
+  }
+
+  // ---------------------------------------------------------------- view prefs
+
+  prefs(): ViewPrefs {
+    return this.prefsCache;
+  }
+
+  /** Crew-level display preferences. Unknown keys are dropped by the schema. */
+  patchPrefs(patch: ViewPrefsPatch, now = Date.now()): ViewPrefs {
+    const next = ViewPrefs.parse({ ...this.prefsCache, ...defined(patch) });
+    this.repo.set('prefs', next, now);
+    this.prefsCache = next;
+    this.bus.emit('settings:changed', { keys: ['prefs'] });
+    return next;
+  }
+
+  // ---------------------------------------------------------------- imagery
+
+  imagery(): ImagerySource[] {
+    return this.imageryCache;
+  }
+
+  /** Replace the whole list (at most MAX_IMAGERY_SOURCES). Ids are kept when present. */
+  setImagery(
+    list: (ImagerySourceInput & { id?: string | undefined })[],
+    newId: () => string,
+    now = Date.now(),
+  ): ImagerySource[] {
+    const byId = new Map(this.imageryCache.map((s) => [s.id, s]));
+    const next: ImagerySource[] = list.slice(0, MAX_IMAGERY_SOURCES).map((s) => {
+      const prev = s.id ? byId.get(s.id) : undefined;
+      const { id: _id, ...input } = s;
+      return {
+        ...input,
+        id: prev?.id ?? newId(),
+        createdAt: prev?.createdAt ?? now,
+        updatedAt: now,
+      };
+    });
+    this.repo.set('imagery', next, now);
+    this.imageryCache = next;
+    // A removed source must not stay selected.
+    if (
+      this.prefsCache.imagerySource &&
+      !next.some((s) => s.id === this.prefsCache.imagerySource)
+    ) {
+      this.patchPrefs({ imagerySource: null }, now);
+    }
+    this.bus.emit('settings:changed', { keys: ['imagery'] });
+    return next;
   }
 
   /** The "restore recommended defaults" button. */

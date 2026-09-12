@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -21,6 +22,8 @@ const Env = z.object({
   RODE_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(180),
   /** MapLibre style.json or TileJSON URL for offline charts (the tiles profile). Unset = polar view only. */
   RODE_TILES_URL: z.string().optional(),
+  /** Directory of raster .mbtiles files for the polar-view background; default <RODE_DATA_DIR>/mbtiles. */
+  RODE_MBTILES_DIR: z.string().optional(),
 
   RODE_SOURCE: z
     .enum(['nmea0183-tcp', 'nmea0183-udp', 'signalk-ws', 'simulator', 'replay'])
@@ -66,7 +69,9 @@ const Env = z.object({
 export type Config = z.infer<typeof Env>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  return Env.parse(env);
+  const c = Env.parse(env);
+  c.RODE_MBTILES_DIR ??= path.join(c.RODE_DATA_DIR, 'mbtiles');
+  return c;
 }
 
 /** The subset of settings the environment is allowed to pin. */

@@ -8,6 +8,7 @@ import type {
   WatchPhase,
   WatchStateName,
 } from '@rode/core';
+import type { ViewPrefs } from './api.js';
 
 /*
  * What the web app sees. These are views: derived from engine and normaliser
@@ -135,6 +136,8 @@ export interface FullState {
   health: HealthView;
   /** The most recent events, newest last, for the UI's activity strip. */
   recentEvents: EventRecord[];
+  /** Shared display preferences; every device shows the same thing. */
+  prefs: ViewPrefs;
 }
 
 /** An event as persisted: the engine event plus its log sequence. */
@@ -173,5 +176,6 @@ export type ServerMessage =
       time?: TimeView;
       health?: HealthView;
       events?: EventRecord[];
+      prefs?: ViewPrefs;
     }
   | { type: 'pong'; t: number; serverTime: number };

@@ -284,3 +284,133 @@ describe('admin API', () => {
     expect(anon.statusCode).toBe(401);
   });
 });
+
+describe('manual radius and live settings', () => {
+  it('edits the circle, applies setting changes to the active session, and resets', async () => {
+    const { env, c } = await boot();
+    const { services, clock } = env;
+    feed(services, clock, { depth: 5 });
+    await c.req({ method: 'POST', url: '/api/anchor/drop', payload: {} });
+    run(services, clock, 3, { position: at(0, 12) });
+    await c.req({ method: 'POST', url: '/api/anchor/set' });
+    const computed = services.engine.getState().session?.geometry?.swingRadius ?? 0;
+
+    let res = await c.req({
+      method: 'POST',
+      url: '/api/anchor/radius',
+      payload: { swingRadius: 80, mode: 'linked' },
+    });
+    expect(res.json()).toEqual({ ok: true });
+    let s = services.engine.getState().session;
+    expect(s?.radiusOverride).toMatchObject({ swingRadius: 80, warnRadius: 70, mode: 'linked' });
+    expect(s?.geometry?.swingRadius).toBeCloseTo(computed, 3);
+
+    // A settings change reaches the active session: linked override follows warnDistance.
+    res = await c.req({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: { alarm: { warnDistance: 30, swingMargin: 40 } },
+    });
+    expect(res.statusCode).toBe(200);
+    s = services.engine.getState().session;
+    expect(s?.radiusOverride?.warnRadius).toBe(50);
+    expect(s?.geometry?.swingRadius).toBeCloseTo(computed + 25, 1);
+    const ev = services.repos.events.recent(20).map((e) => e.type);
+    expect(ev).toContain('geometry-recomputed');
+    expect(ev).toContain('radius-overridden');
+
+    res = await c.req({
+      method: 'POST',
+      url: '/api/anchor/radius',
+      payload: { warnRadius: 90, mode: 'independent' },
+    });
+    expect(res.json()).toMatchObject({ ok: false, reason: 'warn-outside-alarm' });
+    res = await c.req({ method: 'DELETE', url: '/api/anchor/radius' });
+    expect(res.json()).toEqual({ ok: true });
+    expect(services.engine.getState().session?.radiusOverride).toBeNull();
+  });
+});
+
+describe('view preferences', () => {
+  it('are shared server-side and pushed over the websocket', async () => {
+    const { app, env, c } = await boot();
+    let res = await c.req({ method: 'GET', url: '/api/prefs' });
+    expect(res.json()).toMatchObject({ trackHours: 6, showAis: true, imagerySource: null });
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie: c.cookie } });
+    const messages: ServerMessage[] = [];
+    ws.on('message', (d: Buffer) => messages.push(JSON.parse(d.toString()) as ServerMessage));
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+    await wait(() => messages.length >= 2);
+
+    res = await c.req({
+      method: 'PATCH',
+      url: '/api/prefs',
+      payload: { trackHours: 12, bogus: 1 },
+    });
+    expect(res.json()).toMatchObject({ trackHours: 12 });
+    expect(res.json()).not.toHaveProperty('bogus');
+    await wait(() => messages.some((m) => m.type === 'delta' && m.prefs?.trackHours === 12));
+    ws.close();
+    // Also present in the snapshot for a device connecting later.
+    expect(env.services.state.prefs().trackHours).toBe(12);
+  });
+});
+
+describe('imagery API', () => {
+  it('manages up to five sources, serves tiles, and clears a removed selection', async () => {
+    const { env, c } = await boot();
+    let res = await c.req({ method: 'GET', url: '/api/imagery' });
+    expect(res.json()).toMatchObject({ sources: [], max: 5 });
+    expect(res.json<{ presets: { name: string }[] }>().presets.map((p) => p.name)).toContain(
+      'Google Satellite',
+    );
+
+    res = await c.req({
+      method: 'PUT',
+      url: '/api/imagery',
+      payload: [
+        { name: 'Bad', kind: 'mbtiles', path: '../../etc/passwd', minZoom: 0, maxZoom: 19 },
+      ],
+    });
+    expect(res.statusCode).toBe(400);
+    res = await c.req({
+      method: 'PUT',
+      url: '/api/imagery',
+      payload: [
+        { name: 'Sat', kind: 'xyz', urlTemplate: 'https://tiles.example/{z}/{x}/{y}.png' },
+        { name: 'Local', kind: 'mbtiles', path: 'missing.mbtiles' },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    const sources = res.json<{ sources: { id: string; kind: string }[] }>().sources;
+    expect(sources).toHaveLength(2);
+    const [sat, local] = sources;
+    if (!sat || !local) throw new Error('unreachable');
+
+    res = await c.req({ method: 'PATCH', url: '/api/prefs', payload: { imagerySource: sat.id } });
+    expect(res.json()).toMatchObject({ imagerySource: sat.id });
+
+    // No network in tests: the fetch fails and the tile is a clean 404.
+    res = await c.req({ method: 'GET', url: `/api/tiles/${sat.id}/12/1310/1659` });
+    expect(res.statusCode).toBe(404);
+    res = await c.req({ method: 'GET', url: `/api/imagery/${local.id}/status` });
+    expect(res.json()).toMatchObject({ ok: false });
+    res = await c.req({ method: 'GET', url: `/api/tiles/${sat.id}/99/0/0` });
+    expect(res.statusCode).toBe(400);
+
+    // Removing the selected source deselects it.
+    res = await c.req({
+      method: 'PUT',
+      url: '/api/imagery',
+      payload: [{ ...local, id: local.id }],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(env.services.settings.prefs().imagerySource).toBeNull();
+    // Ids survive a re-save.
+    expect(res.json<{ sources: { id: string }[] }>().sources[0]?.id).toBe(local.id);
+  });
+});

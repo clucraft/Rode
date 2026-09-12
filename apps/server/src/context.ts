@@ -11,6 +11,7 @@ import type { AuthService } from './auth/service.js';
 import type { Dispatcher } from './notify/dispatcher.js';
 import type { Heartbeat } from './notify/heartbeat.js';
 import type { Recipient } from '@rode/protocol';
+import type { ImageryService } from './imagery/service.js';
 import type { SettingsService } from './settings.js';
 import type { StateDeps } from './state.js';
 
@@ -27,6 +28,7 @@ export interface AppContext {
   auth: AuthService;
   notify: { dispatcher: Dispatcher; heartbeat: Heartbeat; envRecipient: Recipient | null };
   state: StateDeps;
+  imagery: ImageryService;
   version: string;
   bootedAt: number;
   /** The process clock. Injected so tests can drive time; never call Date.now() in a route. */

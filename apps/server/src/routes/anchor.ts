@@ -5,6 +5,7 @@ import {
   DropRequest,
   NudgeRequest,
   SetDepthRequest,
+  SetRadiusRequest,
   SetTideRequest,
   WeighRequest,
   type CommandResponse,
@@ -55,6 +56,24 @@ export function anchorRoutes(app: FastifyInstance, ctx: AppContext): void {
     const body = parseBody(SetTideRequest, req, reply);
     if (!body) return;
     return run({ type: 'set-tide', tideRange: body.tideRange }, actorName(req));
+  });
+
+  app.post('/api/anchor/radius', { preHandler: requireRole('crew') }, (req, reply) => {
+    const body = parseBody(SetRadiusRequest, req, reply);
+    if (!body) return;
+    const by = actorName(req);
+    const cmd: Extract<Command, { type: 'set-radius' }> = {
+      type: 'set-radius',
+      mode: body.mode,
+      by,
+    };
+    if (body.swingRadius !== undefined) cmd.swingRadius = body.swingRadius;
+    if (body.warnRadius !== undefined) cmd.warnRadius = body.warnRadius;
+    return run(cmd, by);
+  });
+
+  app.delete('/api/anchor/radius', { preHandler: requireRole('crew') }, (req) => {
+    return run({ type: 'clear-radius', by: actorName(req) }, actorName(req));
   });
 
   // Weigh anchor requires the UI's confirmation: one accidental tap must not

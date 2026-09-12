@@ -14,6 +14,7 @@ import { MqttPublisher } from './notify/mqtt.js';
 import { Supervisor } from './supervisor.js';
 import type { ChannelTarget, Recipient } from '@rode/protocol';
 import { EngineHost } from './engine/host.js';
+import { ImageryService } from './imagery/service.js';
 import { IngestManager } from './ingest/manager.js';
 import { Housekeeping, SampleWriter } from './jobs/samples.js';
 import { SettingsService } from './settings.js';
@@ -181,6 +182,15 @@ export function createServices(opts: ServiceOptions): Services {
       })
     : null;
 
+  const imagery = new ImageryService({
+    sources: () => settings.imagery(),
+    mbtilesDir: config.RODE_MBTILES_DIR ?? path.join(config.RODE_DATA_DIR, 'mbtiles'),
+    cacheDir: path.join(config.RODE_DATA_DIR, 'tile-cache'),
+    log,
+    now,
+    userAgent: `Rode/${config.RODE_VERSION}`,
+  });
+
   const notifications = { lastConfirmedAt: null as number | null };
   const state: StateDeps = {
     engine,
@@ -193,6 +203,7 @@ export function createServices(opts: ServiceOptions): Services {
     clockSource: () => clock.source(),
     notificationsLastConfirmedAt: () =>
       dispatcher.getStats().lastConfirmedAt ?? notifications.lastConfirmedAt,
+    prefs: () => settings.prefs(),
     now,
   };
 
@@ -201,6 +212,9 @@ export function createServices(opts: ServiceOptions): Services {
 
   bus.on('settings:changed', ({ keys }) => {
     if (keys.includes('source')) void ingest.apply(settings.source());
+    // Thresholds are read live; the circle is derived once, so re-derive it.
+    if (keys.includes('alarm') || keys.includes('boat'))
+      engine.command({ type: 'recompute' }, 'settings');
   });
 
   const services: Services = {
@@ -215,6 +229,7 @@ export function createServices(opts: ServiceOptions): Services {
     auth,
     notify: { dispatcher, heartbeat, envRecipient },
     state,
+    imagery,
     version: config.RODE_VERSION,
     bootedAt,
     now,
@@ -265,6 +280,7 @@ export function createServices(opts: ServiceOptions): Services {
       diagnostics.stop();
       await ingest.stop();
       clock.detach();
+      imagery.close();
       engine.stop();
       repos.runtime.set(CLEAN_SHUTDOWN, '1');
       repos.events.append('shutdown', { clean: true }, 'info', now());

@@ -3,6 +3,7 @@ import {
   applyCommand,
   createWatchState,
   deriveStateName,
+  effectiveRadii,
   isSnoozed,
   rehydrateWatchState,
   tick,
@@ -816,5 +817,147 @@ describe('marina: battery and solar', () => {
       airTemp: celsiusToKelvin(22),
     });
     expect(ev.filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------- manual circle
+
+describe('manual radius', () => {
+  it('linked mode moves both circles from one value, keeping the warn distance', () => {
+    const h = new Harness();
+    h.anchorUp(30); // computed swing 48 m, warn 38 m
+    const ev = h.cmd({ type: 'set-radius', swingRadius: 60, mode: 'linked', by: 'skipper' });
+    expect(ev[0]?.type).toBe('radius-overridden');
+    if (ev[0]?.type !== 'radius-overridden') throw new Error('unreachable');
+    expect(ev[0].computed?.swingRadius).toBeCloseTo(48, 1);
+    const o = h.state.session?.radiusOverride;
+    expect(o).toMatchObject({ swingRadius: 60, warnRadius: 50, mode: 'linked', by: 'skipper' });
+    expect(effectiveRadii(h.state.session, h.config)).toEqual({
+      swingRadius: 60,
+      warnRadius: 50,
+      manual: true,
+    });
+    // Driving the warning circle instead pushes the alarm circle out.
+    h.cmd({ type: 'set-radius', warnRadius: 70, mode: 'linked', by: 'skipper' });
+    expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 80, warnRadius: 70 });
+    // The computed geometry is untouched underneath.
+    expect(h.state.session?.geometry?.swingRadius).toBeCloseTo(48, 1);
+  });
+
+  it('independent mode takes each value as given and validates the band', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    h.cmd({ type: 'set-radius', swingRadius: 100, warnRadius: 40, mode: 'independent', by: 'a' });
+    expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 100, warnRadius: 40 });
+    // One value at a time keeps the other.
+    h.cmd({ type: 'set-radius', warnRadius: 55, mode: 'independent', by: 'a' });
+    expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 100, warnRadius: 55 });
+    expect(
+      h.cmd({ type: 'set-radius', warnRadius: 120, mode: 'independent', by: 'a' })[0],
+    ).toMatchObject({ type: 'command-rejected', reason: 'warn-outside-alarm' });
+    expect(
+      h.cmd({ type: 'set-radius', swingRadius: 2, mode: 'independent', by: 'a' })[0],
+    ).toMatchObject({ reason: 'radius-out-of-range' });
+    expect(h.cmd({ type: 'set-radius', mode: 'independent', by: 'a' })[0]).toMatchObject({
+      reason: 'nothing-given',
+    });
+  });
+
+  it('the engine watches the manual circle, not the computed one', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    // 55 m out is inside the computed 48 m? No: outside. Widen manually to 80 m first.
+    h.cmd({ type: 'set-radius', swingRadius: 80, mode: 'linked', by: 'a' });
+    h.run(30, { position: at(0, 55) });
+    expect(h.conditionKeys()).toEqual([]);
+    expect(h.state.live.distanceToEdge).toBeCloseTo(25, 0);
+    // Shrink it under the boat: alarms after the full hold, not instantly.
+    h.cmd({ type: 'set-radius', swingRadius: 40, mode: 'linked', by: 'a' });
+    h.run(3, { position: at(0, 55) });
+    expect(h.conditionKeys()).toEqual([]);
+    h.run(10, { position: at(0, 55) });
+    expect(h.conditionKeys()).toContain('position-outside');
+    expect(h.state.stateName).toBe('ALARM');
+  });
+
+  it('clearing the override returns to the computed circle', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    h.cmd({ type: 'set-radius', swingRadius: 80, mode: 'linked', by: 'a' });
+    expect(h.cmd({ type: 'clear-radius', by: 'a' })[0]).toMatchObject({
+      type: 'radius-override-cleared',
+    });
+    expect(h.state.session?.radiusOverride).toBeNull();
+    expect(effectiveRadii(h.state.session, h.config)?.manual).toBe(false);
+    expect(h.cmd({ type: 'clear-radius', by: 'a' })).toEqual([]);
+  });
+
+  it('is only allowed while watching, and works in marina mode too', () => {
+    const h = new Harness();
+    expect(
+      h.cmd({ type: 'set-radius', swingRadius: 50, mode: 'linked', by: 'a' })[0],
+    ).toMatchObject({ reason: 'not-watching' });
+    h.cmd({ type: 'marina' });
+    h.cmd({ type: 'set-radius', swingRadius: 50, mode: 'linked', by: 'a' });
+    expect(effectiveRadii(h.state.session, h.config)).toMatchObject({ swingRadius: 50 });
+    h.run(20, { position: at(0, 30) });
+    expect(h.conditionKeys()).toEqual([]);
+  });
+
+  it('survives a power cut, and old persisted sessions get a null override', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    h.cmd({ type: 'set-radius', swingRadius: 80, warnRadius: 60, mode: 'independent', by: 'a' });
+    const json = JSON.stringify(h.state);
+    const back = rehydrateWatchState(JSON.parse(json) as WatchState, h.now + 60_000);
+    expect(back.session?.radiusOverride).toMatchObject({ swingRadius: 80, warnRadius: 60 });
+    const legacy = JSON.parse(json) as WatchState;
+    delete (legacy.session as unknown as Record<string, unknown>).radiusOverride;
+    expect(rehydrateWatchState(legacy, h.now).session?.radiusOverride).toBeNull();
+  });
+});
+
+describe('settings change under an active session', () => {
+  it('recompute re-derives the circle from new margins and warn distance', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    expect(h.state.session?.geometry?.swingRadius).toBeCloseTo(48, 1);
+    expect(h.cmd({ type: 'recompute' })).toEqual([]); // nothing changed
+    h.config = { ...h.config, swingMargin: 25, warnDistance: 20 };
+    const ev = h.cmd({ type: 'recompute' });
+    expect(ev[0]?.type).toBe('geometry-recomputed');
+    if (ev[0]?.type !== 'geometry-recomputed') throw new Error('unreachable');
+    expect(ev[0].swingRadius).toBeCloseTo(58, 1);
+    expect(ev[0].warnRadius).toBeCloseTo(38, 1);
+    expect(h.state.session?.geometry?.swingRadius).toBeCloseTo(58, 1);
+    // The HDOP term stays as it was at set: settings can change, the fix cannot.
+    expect(h.state.session?.geometry?.hdopAtSet).toBe(1);
+  });
+
+  it('a linked override follows the new warn distance; an independent one is frozen', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    h.cmd({ type: 'set-radius', swingRadius: 60, mode: 'linked', by: 'a' });
+    h.config = { ...h.config, warnDistance: 25 };
+    h.cmd({ type: 'recompute' });
+    expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 60, warnRadius: 35 });
+    h.cmd({ type: 'set-radius', swingRadius: 60, warnRadius: 50, mode: 'independent', by: 'a' });
+    h.config = { ...h.config, warnDistance: 5, swingMargin: 40 };
+    h.cmd({ type: 'recompute' });
+    expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 60, warnRadius: 50 });
+    expect(effectiveRadii(h.state.session, h.config)).toMatchObject({ swingRadius: 60 });
+  });
+
+  it('marina sessions pick up a new marina radius', () => {
+    const h = new Harness();
+    h.cmd({ type: 'marina' });
+    h.config = { ...h.config, marinaRadius: 35 };
+    expect(h.cmd({ type: 'recompute' })[0]).toMatchObject({ marinaRadius: 35, swingRadius: 35 });
+    expect(h.state.session?.marinaRadius).toBe(35);
+  });
+
+  it('is a no-op when idle', () => {
+    const h = new Harness();
+    expect(h.cmd({ type: 'recompute' })).toEqual([]);
   });
 });

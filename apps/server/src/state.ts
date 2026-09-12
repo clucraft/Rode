@@ -6,6 +6,7 @@ import type {
   HealthView,
   InstrumentsView,
   TimeView,
+  ViewPrefs,
 } from '@rode/protocol';
 import { databaseSizeBytes } from './db/database.js';
 import type { Repos } from './db/repos.js';
@@ -27,6 +28,7 @@ export interface StateDeps {
   timeZone: () => string;
   clockSource: () => 'system' | 'gps' | 'unsynced';
   notificationsLastConfirmedAt: () => number | null;
+  prefs: () => ViewPrefs;
   now?: () => number;
 }
 
@@ -189,5 +191,6 @@ export function fullState(deps: StateDeps): FullState {
     time: timeView(n, now, deps.clockSource()),
     health: healthView(deps, now),
     recentEvents: deps.repos.events.recent(50),
+    prefs: deps.prefs(),
   };
 }

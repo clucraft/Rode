@@ -220,6 +220,9 @@ export class EngineHost {
       case 'anchor-set':
       case 'anchor-nudged':
       case 'tide-updated':
+      case 'radius-overridden':
+      case 'radius-override-cleared':
+      case 'geometry-recomputed':
       case 'marina-started':
         this.opts.repos.sessions.upsert(s);
         break;

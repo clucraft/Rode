@@ -198,3 +198,80 @@ export function pathEntersPolygon(
   }
   return false;
 }
+
+// ---------------------------------------------------------------- web mercator tiles
+
+/**
+ * Slippy-map tile arithmetic (EPSG:3857, 256 px tiles). Used to place raster
+ * imagery under the polar view and by the server's tile cache. Pure; the
+ * tile grid is a property of the projection, not of any provider.
+ */
+export interface TileXY {
+  z: number;
+  x: number;
+  y: number;
+}
+
+const MAX_MERCATOR_LAT = 85.05112878;
+
+/** Tile containing a position at zoom z. */
+export function tileAt(p: LatLon, z: number): TileXY {
+  const n = 2 ** z;
+  const lat = Math.max(-MAX_MERCATOR_LAT, Math.min(MAX_MERCATOR_LAT, p.lat));
+  const latRad = degToRad(lat);
+  const x = Math.floor(((p.lon + 180) / 360) * n);
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { z, x: clampTile(x, n), y: clampTile(y, n) };
+}
+
+function clampTile(v: number, n: number): number {
+  return Math.max(0, Math.min(n - 1, v));
+}
+
+/** North-west corner of a tile. */
+export function tileOrigin(t: TileXY): LatLon {
+  const n = 2 ** t.z;
+  const lon = (t.x / n) * 360 - 180;
+  const lat = radToDeg(Math.atan(Math.sinh(Math.PI * (1 - (2 * t.y) / n))));
+  return { lat, lon };
+}
+
+/** Bounding box of a tile as [west, south, east, north] degrees. */
+export function tileBounds(t: TileXY): { nw: LatLon; se: LatLon } {
+  return { nw: tileOrigin(t), se: tileOrigin({ z: t.z, x: t.x + 1, y: t.y + 1 }) };
+}
+
+/** Bing-style quadkey for a tile. */
+export function quadkey(t: TileXY): string {
+  let key = '';
+  for (let i = t.z; i > 0; i--) {
+    const mask = 1 << (i - 1);
+    let digit = 0;
+    if ((t.x & mask) !== 0) digit += 1;
+    if ((t.y & mask) !== 0) digit += 2;
+    key += String(digit);
+  }
+  return key;
+}
+
+/** Ground resolution at a latitude and zoom, metres per pixel (256 px tiles). */
+export function metresPerPixel(lat: number, z: number): number {
+  return (156543.03392 * Math.cos(degToRad(lat))) / 2 ** z;
+}
+
+/**
+ * The tiles covering a box of `halfWidth` metres around a centre at zoom z,
+ * as inclusive x/y ranges. Used by the polar view (what to draw) and the
+ * prefetcher (what to download).
+ */
+export function tilesCovering(
+  centre: LatLon,
+  halfWidth: number,
+  z: number,
+): { z: number; x0: number; x1: number; y0: number; y1: number } {
+  const dLat = radToDeg(halfWidth / EARTH_RADIUS_M);
+  const dLon = radToDeg(halfWidth / (EARTH_RADIUS_M * Math.cos(degToRad(centre.lat))));
+  const a = tileAt({ lat: centre.lat + dLat, lon: centre.lon - dLon }, z);
+  const b = tileAt({ lat: centre.lat - dLat, lon: centre.lon + dLon }, z);
+  return { z, x0: a.x, x1: b.x, y0: a.y, y1: b.y };
+}
