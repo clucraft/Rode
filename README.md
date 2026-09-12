@@ -254,7 +254,12 @@ apps/web        React PWA
 packages/core   Pure domain logic: geodesy, rode/scope math, state machine, detectors
 packages/protocol  Shared zod schemas for the REST/WS contract
 docs/decisions.md  Why things are the way they are
+CHANGELOG.md       What changed, per release; edit the Unreleased section with your change
 ```
+
+Releases are git tags: `git tag v0.2.0 && git push --tags` publishes
+`ghcr.io/clucraft/rode:0.2.0` and `:latest`; move the Unreleased entries in
+CHANGELOG.md under the new version first.
 
 ## Troubleshooting
 
