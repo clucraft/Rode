@@ -43,6 +43,12 @@ export default tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'error',
       // Stylistic; fights the `new Promise((resolve) => x.close(resolve))` idiom.
       '@typescript-eslint/no-confusing-void-expression': 'off',
+      // Path references pull ambient module declarations (types/*.d.ts) into
+      // every program that compiles the file, including dependent packages.
+      '@typescript-eslint/triple-slash-reference': [
+        'error',
+        { path: 'always', types: 'never', lib: 'never' },
+      ],
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
