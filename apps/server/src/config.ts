@@ -19,6 +19,8 @@ const Env = z.object({
   RODE_WEB_DIR: z.string().optional(),
   RODE_VERSION: z.string().default('0.0.0-dev'),
   RODE_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(180),
+  /** MapLibre style.json or TileJSON URL for offline charts (the tiles profile). Unset = polar view only. */
+  RODE_TILES_URL: z.string().optional(),
 
   RODE_SOURCE: z
     .enum(['nmea0183-tcp', 'nmea0183-udp', 'signalk-ws', 'simulator', 'replay'])

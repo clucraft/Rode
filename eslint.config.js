@@ -13,6 +13,8 @@ export default tseslint.config(
       '**/dev-dist/**',
       'docs/**',
       '**/types/**/*.d.ts',
+      '**/public/**',
+      '**/scripts/**/*.cjs',
       'pnpm-lock.yaml',
     ],
   },

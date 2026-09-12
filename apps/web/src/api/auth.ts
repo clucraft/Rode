@@ -16,14 +16,26 @@ export interface User {
   totpEnabled: boolean;
 }
 
+export interface DeployConfig {
+  version: string;
+  tilesUrl: string | null;
+}
+
 export interface AuthSnapshot {
   loaded: boolean;
   needsSetup: boolean;
   user: User | null;
   settings: SettingsView | null;
+  config: DeployConfig | null;
 }
 
-let snapshot: AuthSnapshot = { loaded: false, needsSetup: false, user: null, settings: null };
+let snapshot: AuthSnapshot = {
+  loaded: false,
+  needsSetup: false,
+  user: null,
+  settings: null,
+  config: null,
+};
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<AuthSnapshot>): void {
@@ -38,14 +50,18 @@ export async function refreshAuth(): Promise<AuthSnapshot> {
     );
     setCsrfToken(me.csrfToken);
     let settings: SettingsView | null = null;
+    let config: DeployConfig | null = null;
     if (me.user) {
       try {
-        settings = await api.get<SettingsView>('/api/settings');
+        [settings, config] = await Promise.all([
+          api.get<SettingsView>('/api/settings'),
+          api.get<DeployConfig>('/api/config'),
+        ]);
       } catch {
         settings = null;
       }
     }
-    set({ loaded: true, needsSetup: me.needsSetup, user: me.user, settings });
+    set({ loaded: true, needsSetup: me.needsSetup, user: me.user, settings, config });
   } catch {
     // Offline: keep whatever we had, but mark loaded so the UI can render.
     set({ loaded: true });
@@ -66,7 +82,7 @@ export async function logout(): Promise<void> {
     await api.post('/api/auth/logout');
   } finally {
     setCsrfToken(null);
-    set({ user: null, settings: null });
+    set({ user: null, settings: null, config: null });
   }
 }
 

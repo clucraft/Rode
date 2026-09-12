@@ -29,6 +29,9 @@ export function Shell() {
 
   return (
     <div className="app">
+      <a className="skip" href="#main">
+        Skip to content
+      </a>
       <header className="topbar">
         <span className="brand">{boatName}</span>
         <div className="strip" aria-label="Connection status">
@@ -95,7 +98,7 @@ export function Shell() {
           </NavLink>
         ))}
       </nav>
-      <main className="content">
+      <main id="main" className="content" tabIndex={-1}>
         <Outlet />
       </main>
     </div>

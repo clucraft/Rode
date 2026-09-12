@@ -16,7 +16,8 @@
   --surface-2: #ebe6da;
   --fg: #101418;
   --fg-2: #3b444d;
-  --muted: #6b7580;
+  /* 5.2:1 on the paper background; labels stay readable in sun. */
+  --muted: #5b6570;
   --line: #cfc8ba;
   --line-strong: #8f8676;
   --accent: #0d5fa4;
@@ -43,12 +44,14 @@
   --bg: #000000;
   --surface: #070000;
   --surface-2: #120302;
-  --fg: #d42a20;
-  --fg-2: #a8221a;
-  --muted: #6e1610;
+  /* Red on black at ~5:1 for body text, ~3:1 for muted labels: enough to
+     read at arm's length without waking the eye's cones. */
+  --fg: #e8382c;
+  --fg-2: #cf2e23;
+  --muted: #b0261c;
   --line: #2c0806;
   --line-strong: #5a100c;
-  --accent: #d42a20;
+  --accent: #e8382c;
   --accent-ink: #000000;
   --ok: #8c1c15;
   --warn: #d42a20;
@@ -66,6 +69,21 @@
   box-sizing: border-box;
 }
 
+/* Skip link: visible only when focused. */
+.skip {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 0.5rem 1rem;
+  z-index: 100;
+}
+.skip:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+}
+
 html,
 body {
   margin: 0;
@@ -76,6 +94,8 @@ body {
 body {
   background: var(--bg);
   color: var(--fg);
+  /* Native controls (range, checkbox) follow the palette, so nothing blue leaks into night mode. */
+  accent-color: var(--accent);
   font-family: var(--font);
   font-size: 16px;
   line-height: 1.35;

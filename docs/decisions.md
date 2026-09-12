@@ -330,3 +330,18 @@ and service worker get `no-cache` so they always revalidate.
 Fridge/freezer bands, battery holds and the solar window are edited next
 to the anchor thresholds, each with its default and reason, converted to
 the boat's temperature unit at the edge. They only run in marina mode.
+
+## 9.1 — The chart is a lazy chunk; the polar view is the product
+
+MapLibre and its CSS are a separate ~280 KB gzipped chunk fetched only when
+the owner taps "Chart" on a boat that has `RODE_TILES_URL` set. The default
+bundle stays at ~115 KB gzipped for the dinghy-on-LTE case. Style or
+TileJSON failures disable the button with the reason; they never replace
+the polar view with an error.
+
+## 9.2 — Hand-written service worker, no Workbox
+
+Three rules fit in sixty lines: hashed assets cache-first, the shell
+network-first with cache fallback, `/api` and `/ws` untouched. Workbox would
+add a build step and a dependency to do the same. The worker registers only
+in production builds so development never serves a stale bundle.

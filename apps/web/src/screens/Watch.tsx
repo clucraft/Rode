@@ -24,6 +24,8 @@ import { useLocal } from '../lib/useLocal.js';
 import { useWakeLock } from '../lib/wakelock.js';
 import { ConfirmDialog, Dialog, Readout } from '../components/common.js';
 import { PolarView } from '../components/PolarView.jsx';
+import { ChartView } from '../components/ChartView.jsx';
+import { useTheme } from '../lib/theme.js';
 
 /*
  * The Watch screen. Home when a session is active. Big unmissable banner,
@@ -61,7 +63,11 @@ const CONDITION_LABEL: Record<string, string> = {
 
 export function Watch() {
   const { state, link, clockOffsetMs } = useStore();
-  const { settings, user } = useAuth();
+  const { settings, user, config } = useAuth();
+  const theme = useTheme();
+  const [viewMode, setViewMode] = useLocal<'polar' | 'chart'>('rode:watch-view', 'polar');
+  const [chartProblem, setChartProblem] = useState<string | null>(null);
+  const chartAvailable = Boolean(config?.tilesUrl) && chartProblem === null;
   const audio = useAudio();
   const units = settings?.units ?? DEFAULT_UNITS;
   const [error, setError] = useState<string | null>(null);
@@ -243,25 +249,44 @@ export function Watch() {
         </ul>
       ) : null}
 
-      <PolarView
-        state={stateName}
-        anchor={centre}
-        swingRadius={radius}
-        warnRadius={warnRadius}
-        boat={boat}
-        headingRad={
-          instruments.heading && !instruments.heading.stale ? instruments.heading.value : null
-        }
-        positionStale={positionStale}
-        track={track}
-        zones={zones}
-        ais={state?.ais ?? []}
-        units={units}
-        setPosition={session?.setPosition ?? null}
-        nudgeMode={nudge && phase === 'SET'}
-        onNudge={onNudge}
-        showAis={showAis}
-      />
+      {viewMode === 'chart' && chartAvailable && config?.tilesUrl ? (
+        <ChartView
+          styleUrl={config.tilesUrl}
+          state={stateName}
+          anchor={centre}
+          swingRadius={radius}
+          warnRadius={warnRadius}
+          boat={boat}
+          headingRad={
+            instruments.heading && !instruments.heading.stale ? instruments.heading.value : null
+          }
+          track={track}
+          zones={zones}
+          ais={showAis ? (state?.ais ?? []) : []}
+          night={theme.theme === 'night'}
+          onUnavailable={(reason) => setChartProblem(reason)}
+        />
+      ) : (
+        <PolarView
+          state={stateName}
+          anchor={centre}
+          swingRadius={radius}
+          warnRadius={warnRadius}
+          boat={boat}
+          headingRad={
+            instruments.heading && !instruments.heading.stale ? instruments.heading.value : null
+          }
+          positionStale={positionStale}
+          track={track}
+          zones={zones}
+          ais={state?.ais ?? []}
+          units={units}
+          setPosition={session?.setPosition ?? null}
+          nudgeMode={nudge && phase === 'SET'}
+          onNudge={onNudge}
+          showAis={showAis}
+        />
+      )}
 
       <div className="track-range">
         <label htmlFor="track-hours">Track</label>
@@ -280,6 +305,18 @@ export function Watch() {
           <input type="checkbox" checked={showAis} onChange={(e) => setShowAis(e.target.checked)} />{' '}
           AIS
         </label>
+        {config?.tilesUrl ? (
+          <button
+            type="button"
+            className="btn quiet small"
+            aria-pressed={viewMode === 'chart'}
+            disabled={chartProblem !== null}
+            title={chartProblem ? `Chart unavailable: ${chartProblem}` : undefined}
+            onClick={() => setViewMode(viewMode === 'chart' ? 'polar' : 'chart')}
+          >
+            {viewMode === 'chart' && chartAvailable ? 'Polar view' : 'Chart'}
+          </button>
+        ) : null}
       </div>
 
       <section className="hero-row">

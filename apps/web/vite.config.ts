@@ -17,6 +17,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     // Mobile on cellular: keep the initial payload honest.
-    chunkSizeWarningLimit: 600,
+    // maplibre-gl is a lazily loaded chunk of its own (~280 KB gzipped).
+    chunkSizeWarningLimit: 1200,
   },
 });

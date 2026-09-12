@@ -335,3 +335,32 @@
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+/* ---------------------------------------------------------------- chart */
+
+.chart {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+/* Red-shift the basemap at night; the overlays keep their own colours. */
+.chart.night canvas {
+  filter: sepia(1) hue-rotate(-50deg) saturate(3) brightness(0.35);
+}
+.chart .maplibregl-ctrl-group {
+  background: var(--surface);
+  border: 1.5px solid var(--line-strong);
+  box-shadow: none;
+}
+.chart .maplibregl-ctrl-group button {
+  width: 40px;
+  height: 40px;
+}
+:root[data-theme='night'] .chart .maplibregl-ctrl-scale {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--fg);
+}

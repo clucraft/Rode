@@ -14,6 +14,12 @@ import { requireRole } from '../auth/guard.js';
 export function settingsRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/settings', { preHandler: requireRole('crew') }, () => ctx.settings.view());
 
+  /** Deployment-level, read-only: things set in the environment, not by the owner. */
+  app.get('/api/config', { preHandler: requireRole('crew') }, () => ({
+    version: ctx.version,
+    tilesUrl: ctx.config.RODE_TILES_URL ?? null,
+  }));
+
   /** Threshold documentation: labels, units, why, min/max, defaults. */
   app.get('/api/settings/docs', { preHandler: requireRole('crew') }, () => ({
     alarm: ALARM_CONFIG_DOCS,
