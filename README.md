@@ -23,7 +23,7 @@ failures.
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/traffic-laptop.png" width="800" alt="Traffic screen: AIS targets over Esri satellite imagery of the anchorage, fitted to show every vessel, with range, CPA and TCPA in a table">
+  <img src="docs/screenshots/traffic-laptop.png" width="800" alt="Traffic screen: AIS targets in red over Esri satellite imagery of the anchorage, one vessel's hour of track in orange, with range, CPA, TCPA and a Track button per vessel in the table">
 </p>
 
 <sub>Screenshots are from the built-in simulator (a Bermuda anchorage), not a real boat. The imagery is real.</sub>
@@ -33,15 +33,16 @@ failures.
 - **Anchor watch.** Drop → back down → Set. The swing circle is computed
   from where the anchor went down and where the boat lay after backing
   down, corrected for the GPS antenna's offset from the bow roller, with the
-  depth captured once at drop so the sounder can go off overnight. Three
-  independent early-warning detectors (position near the edge, wind off the
-  bow, sustained speed) with field-tested thresholds and hysteresis, a
-  break-out rule that escalates straight to critical, and first-class
-  alarms for GPS staleness and data-source loss.
-- **Marina mode.** One tap when you leave the boat in a slip: tight radius,
-  wind detector off, and it watches battery, solar yield and refrigeration
-  instead, reporting every fridge/freezer band change including the one
-  into "off", so a failed freezer that drifts to ambient cannot hide.
+  depth captured once at drop so the sounder can go off overnight, or from
+  the rode you say you paid out. Early warnings for position near the edge
+  and sustained speed, with field-tested thresholds and hysteresis, and
+  first-class alarms for GPS staleness and data-source loss.
+- **Traffic.** AIS targets over satellite imagery, ranges in metres or
+  nautical miles, CPA/TCPA, an hour of track per vessel on request, and a
+  card for any target you tap. Silent for 30 minutes means gone.
+- **Data.** Every instrument the boat reports, true wind and apparent wind
+  direction computed when the instruments do not send them, and rolling
+  24-hour charts of wind, barometer, SOG and STW.
 - **Exclusion zones.** Reefs, cables, fairways; checked independently of
   the circle, with projected-entry warnings from course and speed.
 - **Notifications that prove themselves.** ntfy, Pushover, Telegram,
@@ -136,7 +137,8 @@ Also worth setting: the sounder's transducer depth below the waterline
    _this_ phone.
 5. If the anchor point looks off on the view, **Adjust anchor** lets you drag
    it; everything recomputes. Enter the expected **tide** range if it is
-   large.
+   large. If you know how much chain went out, **Rode out** enters it and the
+   circle is worked from that instead of from where the boat lay at set.
 6. Every anchor set sends a notification: "Anchor watch active — radius 72
    m, rode 41 m, scope 5.7:1". If it does not arrive, fix that before you
    sleep. That is the point of it.
@@ -156,11 +158,16 @@ boat geometry in Settings re-derives the circle of the session that is
 running; you do not have to weigh and drop again.
 
 **Add exclusion zone** opens the zone editor right there; drawing works on
-top of the imagery, so a reef you can see is a reef you can fence.
+top of the imagery, so a reef you can see is a reef you can fence. Zones
+belong to the anchorage: weighing anchor removes them.
 
-The track slider, AIS toggle, background choice and the Traffic screen's
-fit-all switch are stored on the boat, so a phone and a laptop always show
-the same thing.
+**Hide** collapses the control panel to a slim bar on a phone; the
+Acknowledge button stays visible whenever something is alarming.
+
+The track slider, AIS toggle, background choices, zoom and the Traffic
+screen's fit-all switch are stored on the boat, so a phone and a laptop
+always show the same thing. Watch and Traffic keep their own background and
+zoom.
 
 The banner shows one of: NOT WATCHING · ANCHOR DOWN · WATCHING · WARNING ·
 ALARM. Acknowledging an alarm silences audio for the snooze period; it never
@@ -255,7 +262,7 @@ make sim SCENARIO=slow-drag SPEED=60   # fake Cortex on tcp :39150
 ```
 
 `RODE_SOURCE=simulator RODE_SIM_SCENARIO=break-out RODE_SIM_AUTO_COMMANDS=1`
-runs the server against a scenario with the skipper's taps scripted. The ten
+runs the server against a scenario with the skipper's taps scripted. The nine
 scenarios (`pnpm --filter @rode/ingest sim list`) are also the integration
 tests: each replays through the real parser, normaliser and alarm engine and
 asserts on the event log.

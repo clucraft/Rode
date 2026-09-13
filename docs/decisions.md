@@ -453,3 +453,70 @@ resolves sticky against the grid container, so on any page taller than the
 viewport the `bottom: 0` constraint dragged the rail up over the header;
 short pages were unaffected, which is why only Watch and Traffic showed it.
 The rule now resets the offsets and `align-self: start`.
+
+# 12 — Second feedback round (2026-09-13)
+
+## 12.1 — Marina mode and the wind-angle detector are gone
+
+**Context.** The owner asked for both to be removed: marina monitoring was
+not going to be used, and the wind-off-the-bow warning (and the break-out
+rule built on it) fired on nothing but a shift of wind in practice.
+
+**Decision.** Deleted rather than hidden: `marina.ts`, the MARINA phase,
+the cold-box/battery/solar conditions, `awaWindow/awaHoldMs/awaMinWindSpeed`
+and the `wind-shift`/`breakout` conditions, the marina simulator scenario.
+`rehydrateWatchState` brings older persisted state forward: a MARINA
+session is ended, stale conditions are dropped, missing fields get
+defaults. History rows keep `mode: 'marina'` for old sessions. The
+break-out scenario stays as a fixture: it now asserts the speed warning
+precedes the position alarm. Wind data itself is still read, shown and
+charted; it just does not alarm.
+
+## 12.2 — Rode entered by the skipper drives the circle
+
+`AnchorSession.rodeOverride` (metres). `computeAnchorGeometry` takes an
+optional `rodeLength`; when present the horizontal run is
+`sqrt(rode² − vertical²)` instead of the measured distance at set, and
+`rodeEntered` is echoed so the UI can say which it is. Refused when shorter
+than depth plus roller height. Tide and settings recomputes keep the
+entered value; entering null goes back to measured.
+
+## 12.3 — Partial updates must not carry defaults
+
+**Context.** "Move the track slider, then change the background, and the
+slider goes back to 6 h." In zod 4, `.partial()` on an object whose fields
+have `.default()` still applies those defaults to missing keys, so every
+PATCH body arrived on the server with all the other settings reset.
+
+**Decision.** `patchOf(schema)` in `@rode/protocol` strips defaults and
+makes each field optional; every PATCH schema (prefs, units, source, boat,
+night mode, notifications) is built with it. A regression test sends two
+disjoint patches and checks nothing was lost.
+
+## 12.4 — Watch and Traffic views are independent, and zoom is explicit
+
+The extent of the polar view is a half-width in metres. `watchRange` and
+`trafficRange` (null = automatic) and `imagerySource`/`trafficImagery` are
+separate preferences. On Watch the extent only changes when the user
+zooms or the circle changes (then it refits). On Traffic "fit all targets"
+follows the targets while on; turning it off freezes the current extent,
+and a manual zoom turns it off. Range 10 m to 100 nm; rings label in
+nautical miles past 1000 ft / 1000 m.
+
+## 12.5 — AIS tracks live on the server, expiry clears them
+
+The tracker keeps an hour of positions per target (thinned to one every
+10 s), served by `GET /api/ais/:mmsi/track`; the Traffic screen fetches
+once per tracked vessel and follows live positions from then on. A target
+silent for 30 minutes is pruned with its history. Which vessels are
+tracked is a shared preference, so both phones draw the same tracks.
+
+## 12.6 — Derived wind in the normaliser, charts bucketed on the server
+
+Apparent wind direction (heading + AWA) and true wind (apparent minus boat
+motion, `trueWind()` in core with a round-trip property test) are computed
+in `Normalizer.instruments()` when the instruments do not send them, marked
+`source: 'derived'` and stale when any input is. The Data screen's 24-hour
+charts read `/api/series/buckets`, which averages five-minute buckets in
+JavaScript so wind direction can be a circular mean; STW (VHW) and pressure
+ride in the samples' `extra` JSON column, so no migration.

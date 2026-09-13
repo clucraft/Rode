@@ -9,8 +9,36 @@ _Unreleased_.
 
 ## [Unreleased]
 
+### Removed
+
+- **Marina mode** (the MARINA phase, refrigeration/battery/solar monitors,
+  marina thresholds, the marina simulator scenario) and the **wind-angle
+  warning** with its break-out rule. Wind is still shown and charted, it no
+  longer alarms. Persisted state from earlier versions is brought forward on
+  boot: a marina session is ended, stale conditions dropped.
+- The Wind readout under the Watch graphic, the radius labels on the Traffic
+  graphic, and the "here" button in the zone editor.
+
 ### Added
 
+- **Rode out.** Enter the rode actually paid out; the circle is derived from
+  it (`run = sqrt(rode² − vertical²)`) instead of the measured run at set.
+  (`POST /api/anchor/rode`)
+- **Traffic:** targets drawn red; a **Track** button per vessel draws its
+  last hour in orange (server-side history, `GET /api/ais/:mmsi/track`);
+  hover or tap a target for a card with range, bearing, SOG/COG, CPA/TCPA
+  and last seen; ring labels in nautical miles past 1000 ft / 1000 m; zoom
+  from 10 m to 100 nm; targets silent for 30 minutes are dropped with their
+  track.
+- **Data screen** (renamed from Now): STW next to SOG, apparent wind
+  direction, true wind direction and speed computed when the instruments do
+  not send them, and rolling 24-hour charts of apparent wind speed and
+  direction, barometer, SOG and STW (`GET /api/series/buckets`).
+- Watch: **Hide** collapses the control panel to a slim bar (the Acknowledge
+  button stays); the weigh-anchor confirmation says how many zones it will
+  remove; a **Delete** button per zone on the zones settings page.
+- Units and display: the time zone is a searchable list of every IANA zone.
+- VHW (speed through water) parsing; the simulator emits it.
 - **Manual alarm radius.** "Edit alarm radius" on the Watch screen: drag
   either ring on the view or type both numbers. Unchecked, the warning ring
   follows the alarm ring at the configured warn distance and either field
@@ -50,6 +78,13 @@ _Unreleased_.
 
 ### Changed
 
+- Watch and Traffic are independent: each keeps its own background imagery
+  and zoom, stored as shared preferences. The Watch extent changes only when
+  you zoom or the circle changes; Traffic's "fit all targets" follows the
+  targets while on and freezes the extent when turned off.
+- Imagery fills the whole graphic, not just the compass rose.
+- The wind box on the graphic shows apparent wind **direction** and speed.
+- Weighing anchor removes every exclusion zone.
 - README screenshots (phone, night mode, ALARM, Traffic over imagery,
   Imagery settings) captured from the simulator by `pnpm screenshots`.
 - **Settings changes apply to the running session.** Editing alarm
@@ -64,6 +99,12 @@ _Unreleased_.
 
 ### Fixed
 
+- Changing one setting reset the others (track slider back to 6 h after
+  picking a background, units resetting each other): zod 4's `.partial()`
+  kept field defaults, so every PATCH carried them. All patch schemas now
+  strip defaults (`patchOf`).
+- The zone editor could not scroll once it had more than a few points, so
+  Save was unreachable and points could not be deleted on a phone.
 - On laptops the left navigation rail overlapped the top status bar on the
   Watch and Traffic screens (a leftover `bottom: 0` from the phone layout
   on the sticky rail; only pages taller than the viewport were affected).
