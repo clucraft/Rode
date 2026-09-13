@@ -1,6 +1,6 @@
 {
   "name": "@rode/web",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Mobile-first React PWA — a view of the alarm state, never the thing computing it",
   "type": "module",

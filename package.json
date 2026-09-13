@@ -1,6 +1,6 @@
 {
   "name": "rode",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Self-hosted boat monitor and anchor watch for vessels with a Vesper Cortex M1",
   "license": "MIT",

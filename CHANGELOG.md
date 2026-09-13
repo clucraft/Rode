@@ -9,6 +9,13 @@ _Unreleased_.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-09-13
+
+First tagged release. Includes the field-feedback round of 2026-09-12 (manual
+radius, imagery, shared preferences) and the second round below.
+
 ### Removed
 
 - **Marina mode** (the MARINA phase, refrigeration/battery/solar monitors,
@@ -116,7 +123,7 @@ _Unreleased_.
 
 ## [0.1.0] - 2026-09-11
 
-First complete build from the specification (`docs/spec.md`).
+First complete build from the specification (never tagged; `edge` only) (`docs/spec.md`).
 
 ### Added
 
@@ -145,5 +152,6 @@ First complete build from the specification (`docs/spec.md`).
 - Packaging: multi-arch Docker image (amd64/arm64), compose profiles for
   tiles, MQTT and TLS, `make backup` / `make restore`, README, SECURITY.md.
 
-[Unreleased]: https://github.com/clucraft/Rode/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/clucraft/Rode/releases/tag/v0.1.0
+[Unreleased]: https://github.com/clucraft/Rode/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/clucraft/Rode/releases/tag/v0.3.0
+[0.1.0]: https://github.com/clucraft/Rode/commit/a30611e

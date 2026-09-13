@@ -1,6 +1,6 @@
 {
   "name": "@rode/core",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Pure, I/O-free domain logic: units, geodesy, rode/scope math, alarm state machine",
   "type": "module",

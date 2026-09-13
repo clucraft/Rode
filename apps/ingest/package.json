@@ -1,6 +1,6 @@
 {
   "name": "@rode/ingest",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "private": true,
   "description": "NMEA acquisition, normalization, simulator, record/replay",
   "type": "module",
