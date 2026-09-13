@@ -12,6 +12,22 @@ failures.
 
 > Rode does not replace a proper anchor watch or keeping a lookout.
 
+<p align="center">
+  <img src="docs/screenshots/watch-phone.png" width="300" alt="Watch screen on a phone: WATCHING banner, swing circle over satellite imagery, wind arrow, wind and depth readouts, big controls">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/watch-night-phone.png" width="300" alt="The same screen in night mode: red on black">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/watch-alarm-laptop.png" width="800" alt="ALARM on a laptop: the boat has dragged outside the swing circle; the conditions are listed under the banner and the Acknowledge button is the biggest thing on screen">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/traffic-laptop.png" width="800" alt="Traffic screen: AIS targets over Esri satellite imagery of the anchorage, fitted to show every vessel, with range, CPA and TCPA in a table">
+</p>
+
+<sub>Screenshots are from the built-in simulator (a Bermuda anchorage), not a real boat. The imagery is real.</sub>
+
 ## What it does
 
 - **Anchor watch.** Drop → back down → Set. The swing circle is computed
@@ -170,6 +186,10 @@ Settings › **Imagery** takes up to five raster sources, picked from the
   apply to you, not to Rode; the Google and Bing endpoints are the
   unofficial tile servers.
 
+<p align="center">
+  <img src="docs/screenshots/imagery-settings.png" width="800" alt="Settings › Imagery: an Esri World Imagery source with its URL template, zoom range, cache status and a Cache-around-the-boat button; buttons to add the Google, Bing or an MBTiles source">
+</p>
+
 The polar view stays a north-up local plane; tiles are placed by projecting
 their corners, which over an anchorage is exact to well under a pixel. At
 night the imagery is red-shifted with the rest of the screen.
@@ -255,6 +275,7 @@ packages/core   Pure domain logic: geodesy, rode/scope math, state machine, dete
 packages/protocol  Shared zod schemas for the REST/WS contract
 docs/decisions.md  Why things are the way they are
 CHANGELOG.md       What changed, per release; edit the Unreleased section with your change
+scripts/screenshots.mjs  Regenerates docs/screenshots from two simulator instances (pnpm screenshots)
 ```
 
 Releases are git tags: `git tag v0.2.0 && git push --tags` publishes

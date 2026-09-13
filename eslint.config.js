@@ -59,6 +59,11 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   {
+    // Puppeteer scripts run in node and evaluate snippets in the page.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     files: ['apps/web/**'],
     languageOptions: { globals: { ...globals.browser } },
     rules: {

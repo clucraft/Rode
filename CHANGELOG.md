@@ -50,6 +50,8 @@ _Unreleased_.
 
 ### Changed
 
+- README screenshots (phone, night mode, ALARM, Traffic over imagery,
+  Imagery settings) captured from the simulator by `pnpm screenshots`.
 - **Settings changes apply to the running session.** Editing alarm
   thresholds or boat geometry re-derives the active circle and marina
   radius (`recompute` command, logged as `geometry-recomputed`) instead of
