@@ -136,7 +136,7 @@ export const breakOut: Scenario = {
   description:
     'The anchor lets go. For a minute the boat sails around it at 1.5 kn with the wind 110° off the bow while still inside the circle, then drifts out.',
   expectation:
-    'The combined wind-angle + speed rule escalates straight to critical (break-out) before the position alarm fires.',
+    'The speed detector warns while the boat is still inside the circle; the position alarm follows once it drifts out. Wind angle plays no part.',
   durationS: BREAK_DRIFT + 5 * 60,
   startEpochMs: START,
   boat: DEFAULT_SIM_BOAT,
@@ -179,8 +179,7 @@ export const lightAirVaneSpin: Scenario = {
   name: 'Light-air vane spin',
   description:
     'Two hours of glassy calm. Apparent wind 0–4 kn and the vane wanders the full circle. The boat sits still on its rode.',
-  expectation:
-    'No wind-shift warning, ever. This is the regression test for the most common false alarm.',
+  expectation: 'Nothing is raised, ever. A spinning vane must not produce an alarm of any kind.',
   durationS: 2 * HOUR,
   startEpochMs: START,
   boat: DEFAULT_SIM_BOAT,

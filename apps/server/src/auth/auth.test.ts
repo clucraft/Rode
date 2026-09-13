@@ -126,14 +126,14 @@ describe('login and sessions', () => {
     const c = await setupAdmin(app);
     const noCsrf = await app.inject({
       method: 'POST',
-      url: '/api/anchor/marina',
+      url: '/api/anchor/drop',
       headers: { cookie: c.cookie },
     });
     expect(noCsrf.statusCode).toBe(403);
     expect(noCsrf.json().error).toBe('csrf');
     const wrong = await app.inject({
       method: 'POST',
-      url: '/api/anchor/marina',
+      url: '/api/anchor/drop',
       headers: { cookie: c.cookie, 'x-csrf-token': 'nope' },
     });
     expect(wrong.statusCode).toBe(403);
@@ -205,7 +205,7 @@ describe('roles', () => {
       await signIn(app, { username: 'mate', password: 'a perfectly adequate passphrase' })
     ).client;
     expect(crew).not.toBeNull();
-    expect((await crew?.req({ method: 'POST', url: '/api/anchor/marina' }))?.json().ok).toBe(true);
+    expect((await crew?.req({ method: 'POST', url: '/api/anchor/drop' }))?.json().ok).toBe(true);
     expect(
       (await crew?.req({ method: 'PATCH', url: '/api/settings', payload: { boatName: 'x' } }))
         ?.statusCode,
@@ -315,7 +315,7 @@ describe('API tokens', () => {
     expect(read.statusCode).toBe(200);
     const write = await app.inject({
       method: 'POST',
-      url: '/api/anchor/marina',
+      url: '/api/anchor/drop',
       headers: { authorization: `Bearer ${token}` },
     });
     expect(write.statusCode).toBe(403);

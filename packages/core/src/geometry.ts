@@ -27,6 +27,8 @@ export interface AnchorGeometry {
   warnRadius: number;
   /** Bearing from anchor to set position, radians true. */
   bearingAnchorToBoat: number;
+  /** True when rodeLength came from the skipper rather than the measured run. */
+  rodeEntered: boolean;
   /** Inputs, echoed so a session row is self-describing. */
   depthAtDrop: number;
   bowRollerHeight: number;
@@ -43,6 +45,12 @@ export interface GeometryInputs {
   depthAtDrop: number;
   /** Expected tidal range during the stay, metres. Zero if unknown. */
   tideRange: number;
+  /**
+   * Rode paid out as entered by the skipper, metres. When given, the
+   * horizontal run is derived from it instead of measured, so the circle no
+   * longer depends on where the boat lay when "set" was pressed.
+   */
+  rodeLength?: number | null;
   /** HDOP at set, if known. Widens the margin. */
   hdop: number | null;
   boat: BoatGeometry;
@@ -69,9 +77,15 @@ export function computeAnchorGeometry(inputs: GeometryInputs): AnchorGeometry {
   const tideRange = Math.max(0, inputs.tideRange);
   const bowRollerHeight = Math.max(0, boat.bowRollerHeight);
 
-  const horizontalRun = distanceM(anchor, setPosition);
   const verticalDrop = depthAtDrop + bowRollerHeight;
-  const rodeLength = Math.hypot(horizontalRun, verticalDrop);
+  const measuredRun = distanceM(anchor, setPosition);
+  const entered =
+    inputs.rodeLength !== undefined && inputs.rodeLength !== null && inputs.rodeLength > 0
+      ? inputs.rodeLength
+      : null;
+  const rodeLength = entered ?? Math.hypot(measuredRun, verticalDrop);
+  const horizontalRun =
+    entered !== null ? Math.sqrt(Math.max(0, entered ** 2 - verticalDrop ** 2)) : measuredRun;
 
   // Guard the ratio against a zero vertical leg (dinghy in a puddle).
   const scopeRatio = verticalDrop > 0 ? rodeLength / verticalDrop : Number.POSITIVE_INFINITY;
@@ -101,7 +115,8 @@ export function computeAnchorGeometry(inputs: GeometryInputs): AnchorGeometry {
     hdopMargin,
     swingRadius,
     warnRadius,
-    bearingAnchorToBoat: horizontalRun > 0 ? bearingRad(anchor, setPosition) : 0,
+    bearingAnchorToBoat: measuredRun > 0 ? bearingRad(anchor, setPosition) : 0,
+    rodeEntered: entered !== null,
     depthAtDrop,
     bowRollerHeight,
     tideRange,

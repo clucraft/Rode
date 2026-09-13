@@ -1,5 +1,5 @@
 import mqtt, { type MqttClient } from 'mqtt';
-import type { WatchState } from '@rode/core';
+import { effectiveRadii, type WatchState } from '@rode/core';
 import type { Bus } from '../bus.js';
 import type { Logger } from '../logger.js';
 
@@ -74,7 +74,7 @@ export class MqttPublisher {
         })),
         distance: s.live.distanceFromAnchor,
         distanceToEdge: s.live.distanceToEdge,
-        radius: s.session?.geometry?.swingRadius ?? s.session?.marinaRadius ?? null,
+        radius: effectiveRadii(s.session)?.swingRadius ?? null,
         scope: s.session?.geometry?.scopeRatio ?? null,
         positionAgeS: s.live.positionAgeS,
         sessionId: s.session?.id ?? null,

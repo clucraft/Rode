@@ -56,6 +56,14 @@ export type ParsedSentence =
     }
   | { type: 'GLL'; time: UtcTime | null; valid: boolean; lat: number | null; lon: number | null }
   | { type: 'VTG'; cogTrue: number | null; cogMagnetic: number | null; sog: number | null }
+  | {
+      /** Water speed and heading from the log: $--VHW,hdgT,T,hdgM,M,kn,N,km/h,K */
+      type: 'VHW';
+      headingTrue: number | null;
+      headingMagnetic: number | null;
+      /** m/s */
+      stw: number | null;
+    }
   | { type: 'ZDA'; time: UtcTime | null; date: UtcDate | null }
   | {
       type: 'HDG';
@@ -125,6 +133,7 @@ const SUPPORTED = new Set([
   'RMC',
   'GLL',
   'VTG',
+  'VHW',
   'ZDA',
   'HDG',
   'HDT',
@@ -190,6 +199,13 @@ export function parseSentence(s: RawSentence): ParseResult {
           cogTrue: mapNum(num(get(0)), degToRad),
           cogMagnetic: mapNum(num(get(2)), degToRad),
           sog: mapNum(num(get(4)), knotsToMps),
+        });
+      case 'VHW':
+        return ok({
+          type: 'VHW',
+          headingTrue: mapNum(num(get(0)), degToRad),
+          headingMagnetic: mapNum(num(get(2)), degToRad),
+          stw: mapNum(num(get(4)), knotsToMps),
         });
       case 'ZDA': {
         const day = int(get(1));

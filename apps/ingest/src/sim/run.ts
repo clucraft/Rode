@@ -1,7 +1,6 @@
 import {
   applyCommand,
   createWatchState,
-  DEFAULT_MARINA_CONFIG,
   rehydrateWatchState,
   resolveAlarmConfig,
   tick,
@@ -38,7 +37,6 @@ export interface RunResult {
 
 export function runScenario(scenario: Scenario, opts: RunOptions = {}): RunResult {
   const config = resolveAlarmConfig(scenario.alarmConfig);
-  const marinaConfig = { ...DEFAULT_MARINA_CONFIG, ...scenario.marinaConfig };
   let normalizer = new Normalizer();
   let ids = 0;
   const newId = () => `sim-${scenario.id}-${++ids}`;
@@ -83,18 +81,12 @@ export function runScenario(scenario: Scenario, opts: RunOptions = {}): RunResul
       normalizer.setSourceState({ connected: false, since: disconnectedSince });
     }
 
-    const localHour =
-      scenario.utcOffsetHours === undefined
-        ? null
-        : (((new Date(now).getUTCHours() + scenario.utcOffsetHours) % 24) + 24) % 24;
     const ctx: EngineContext = {
       now,
       telemetry: normalizer.snapshot(now),
       config,
       boat: scenario.boat,
       zones: opts.zones ?? [],
-      marinaConfig,
-      localHour,
       newId,
     };
 

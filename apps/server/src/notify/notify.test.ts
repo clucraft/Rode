@@ -299,38 +299,6 @@ describe('Dispatcher', () => {
     await d.stop();
   });
 
-  it('reports every cold-box band transition including into off', async () => {
-    env = await testEnv();
-    const d = dispatcherFor(env, fakeFetch().fn);
-    const n = d.notificationFor(
-      {
-        at: 1,
-        type: 'cold-box-band-changed',
-        box: 'freezer',
-        from: 'failing',
-        to: 'off',
-        temp: 295,
-        ambient: 296,
-      },
-      'Sabado',
-    );
-    expect(n?.severity).toBe('warning');
-    expect(n?.body).toMatch(/reads as switched off/);
-    const f = d.notificationFor(
-      {
-        at: 1,
-        type: 'cold-box-band-changed',
-        box: 'freezer',
-        from: 'warm',
-        to: 'failing',
-        temp: 270,
-        ambient: null,
-      },
-      'Sabado',
-    );
-    expect(f?.severity).toBe('critical');
-  });
-
   it('the test endpoint reports per-target results', async () => {
     env = await testEnv();
     const f = fakeFetch((url) => ({

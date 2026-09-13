@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { celsiusToKelvin, degToRad, knotsToMps } from '@rode/core';
 import { Normalizer, type NormalizerEvent } from './normalize.js';
+import { AisTracker } from './nmea/ais.js';
 import {
   encodeDBT,
   encodeDPT,
@@ -12,6 +13,7 @@ import {
   encodeMWV,
   encodeRMC,
   encodeRMCNoFix,
+  encodeVHW,
   encodeVTG,
   encodeXDR,
   encodeZDA,
@@ -157,5 +159,76 @@ describe('Normalizer', () => {
     expect(n.ais.all()).toHaveLength(1);
     expect(events.filter((e) => e.type === 'ais')).toHaveLength(1);
     expect(n.counters.aisDecoded).toBe(1);
+  });
+});
+
+describe('derived wind and water speed', () => {
+  it('parses VHW into STW and uses its heading only as a fallback', () => {
+    const n = new Normalizer();
+    const now = 1_700_000_000_000;
+    n.feedLine(encodeVHW(knotsToMps(5), degToRad(45)), now, 'test');
+    expect(n.getField('stw')?.value).toBeCloseTo(knotsToMps(5), 6);
+    expect(n.getField('heading')?.value).toBeCloseTo(degToRad(45), 6);
+    // A compass sentence takes over and a later VHW does not clobber it.
+    n.feedLine(encodeHDT(degToRad(90)), now + 1000, 'test');
+    n.feedLine(encodeVHW(knotsToMps(5), degToRad(45)), now + 2000, 'test');
+    expect(n.getField('heading')?.value).toBeCloseTo(degToRad(90), 6);
+  });
+
+  it('derives apparent wind direction and true wind when the instruments do not send them', () => {
+    const n = new Normalizer();
+    const now = 1_700_000_000_000;
+    n.feedLine(encodeHDT(degToRad(90)), now, 'test');
+    n.feedLine(encodeMWV(degToRad(45), 8, 'R'), now, 'test');
+    const i = n.instruments(now);
+    expect(i.awd?.value).toBeCloseTo(degToRad(135), 6);
+    expect(i.awd?.source).toBe('derived');
+    // No SOG/COG: the boat is treated as stopped, so true equals apparent.
+    // Wind speed round-trips through knots on the wire, hence the loose tolerance.
+    expect(i.tws?.value).toBeCloseTo(8, 1);
+    expect(i.twd?.value).toBeCloseTo(degToRad(135), 3);
+    expect(i.twa?.value).toBeCloseTo(degToRad(45), 3);
+    // Motoring north at 3 m/s into the same apparent wind changes the true wind.
+    n.feedLine(encodeVTG(0, 3), now, 'test');
+    const j = n.instruments(now);
+    expect(j.tws?.value).not.toBeCloseTo(8, 1);
+    expect(j.twd?.stale).toBe(false);
+    // Once every input is old, the derived values are stale too.
+    expect(n.instruments(now + 60_000).twd?.stale).toBe(true);
+  });
+
+  it('keeps instrument-provided true wind over the derived one', () => {
+    const n = new Normalizer();
+    const now = 1_700_000_000_000;
+    n.feedLine(encodeHDT(0), now, 'test');
+    n.feedLine(encodeMWV(degToRad(30), 6, 'R'), now, 'test');
+    n.feedLine(encodeMWV(degToRad(50), 9, 'T'), now, 'test');
+    const i = n.instruments(now);
+    expect(i.tws?.value).toBeCloseTo(9, 1);
+    expect(i.tws?.source).not.toBe('derived');
+  });
+});
+
+describe('AIS tracks', () => {
+  it('keeps an hour of positions per target and clears them on expiry', () => {
+    const t = new AisTracker();
+    const now = 1_700_000_000_000;
+    // Class A position report for 244670316 (from the parser tests).
+    const sentence = '!AIVDM,1,1,,A,13aEOK?P00PD2wVMdLDRhgvL289?,0*26';
+    t.feed(sentence, false, now);
+    t.feed(sentence, false, now + 5_000); // within the spacing: not recorded
+    t.feed(sentence, false, now + 20_000);
+    expect(t.track('244670316', now + 20_000).map((p) => p.at)).toEqual([now, now + 20_000]);
+    t.feed(sentence, false, now + 30 * 60_000);
+    t.feed(sentence, false, now + 70 * 60_000);
+    // An hour later the first two have aged out.
+    expect(t.track('244670316', now + 70 * 60_000).map((p) => p.at)).toEqual([
+      now + 30 * 60_000,
+      now + 70 * 60_000,
+    ]);
+    expect(t.track('nobody', now)).toEqual([]);
+    t.prune(now + 101 * 60_000, 30 * 60_000);
+    expect(t.all()).toEqual([]);
+    expect(t.track('244670316', now + 101 * 60_000)).toEqual([]);
   });
 });

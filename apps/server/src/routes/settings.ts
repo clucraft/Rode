@@ -1,10 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import {
-  ALARM_CONFIG_DOCS,
-  DEFAULT_ALARM_CONFIG,
-  DEFAULT_MARINA_CONFIG,
-  MARINA_CONFIG_DOCS,
-} from '@rode/core';
+import { ALARM_CONFIG_DOCS, DEFAULT_ALARM_CONFIG } from '@rode/core';
 import { SCENARIOS } from '@rode/ingest';
 import { SettingsPatch } from '@rode/protocol';
 import { actorName, parseBody, type AppContext } from '../context.js';
@@ -24,8 +19,6 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/settings/docs', { preHandler: requireRole('crew') }, () => ({
     alarm: ALARM_CONFIG_DOCS,
     alarmDefaults: DEFAULT_ALARM_CONFIG,
-    marinaDefaults: DEFAULT_MARINA_CONFIG,
-    marina: MARINA_CONFIG_DOCS,
     scenarios: SCENARIOS.map((s) => ({ id: s.id, name: s.name, description: s.description })),
   }));
 
@@ -41,7 +34,7 @@ export function settingsRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post('/api/settings/alarm/restore-defaults', { preHandler: requireRole('admin') }, (req) => {
     ctx.settings.restoreAlarmDefaults();
     ctx.repos.events.append('settings-changed', {
-      keys: ['alarm', 'marina'],
+      keys: ['alarm'],
       restored: true,
       by: actorName(req),
     });

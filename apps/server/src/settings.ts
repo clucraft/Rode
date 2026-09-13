@@ -1,11 +1,9 @@
 import {
   ALARM_CONFIG_DOCS,
   DEFAULT_ALARM_CONFIG,
-  DEFAULT_MARINA_CONFIG,
   resolveAlarmConfig,
   type AlarmConfig,
   type BoatGeometry,
-  type MarinaConfig,
 } from '@rode/core';
 import {
   ImagerySource,
@@ -44,7 +42,6 @@ const DEFAULTS: SettingsView = {
     magneticVariationDeg: null,
   },
   alarm: { ...DEFAULT_ALARM_CONFIG },
-  marina: { ...DEFAULT_MARINA_CONFIG },
   suggestedScope: 5,
   boatName: 'Rode',
   timeZone: 'UTC',
@@ -100,11 +97,6 @@ export class SettingsService {
         ...defined(this.envOverrides.source),
       },
       alarm: { ...DEFAULTS.alarm, ...defined(stored.alarm), ...defined(this.envOverrides.alarm) },
-      marina: {
-        ...DEFAULTS.marina,
-        ...defined(stored.marina),
-        ...defined(this.envOverrides.marina),
-      },
       suggestedScope: stored.suggestedScope ?? DEFAULTS.suggestedScope,
       boatName: stored.boatName ?? DEFAULTS.boatName,
       timeZone: stored.timeZone ?? DEFAULTS.timeZone,
@@ -135,10 +127,6 @@ export class SettingsService {
     return resolveAlarmConfig(this.cache.alarm);
   }
 
-  marina(): MarinaConfig {
-    return { ...DEFAULT_MARINA_CONFIG, ...(this.cache.marina as Partial<MarinaConfig>) };
-  }
-
   suggestedScope(): number {
     return this.cache.suggestedScope;
   }
@@ -167,7 +155,6 @@ export class SettingsService {
       }
       write('alarm', next);
     }
-    if (patch.marina) write('marina', { ...this.cache.marina, ...patch.marina });
     if (patch.suggestedScope !== undefined) write('suggestedScope', patch.suggestedScope);
     if (patch.boatName !== undefined) write('boatName', patch.boatName);
     if (patch.timeZone !== undefined) write('timeZone', patch.timeZone);
@@ -233,9 +220,8 @@ export class SettingsService {
   /** The "restore recommended defaults" button. */
   restoreAlarmDefaults(now = Date.now()): void {
     this.repo.set('alarm', { ...DEFAULT_ALARM_CONFIG }, now);
-    this.repo.set('marina', { ...DEFAULT_MARINA_CONFIG }, now);
     this.cache = this.load();
-    this.bus.emit('settings:changed', { keys: ['alarm', 'marina'] });
+    this.bus.emit('settings:changed', { keys: ['alarm'] });
   }
 }
 

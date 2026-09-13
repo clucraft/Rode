@@ -10,9 +10,8 @@ import {
   sourceDisconnect,
   tidalSwing,
 } from './anchor.js';
-import { marinaFridgeFailure } from './marina.js';
 
-/** The ten checked-in scenarios, in the order the spec lists them. */
+/** The checked-in scenarios, in the order the spec lists them. */
 export const SCENARIOS: readonly Scenario[] = [
   quietNight,
   slowDrag,
@@ -22,7 +21,6 @@ export const SCENARIOS: readonly Scenario[] = [
   gpsDropout,
   sourceDisconnect,
   hardPowerCut,
-  marinaFridgeFailure,
   tidalSwing,
 ];
 
@@ -36,7 +34,6 @@ export {
   gpsNoiseFloor,
   hardPowerCut,
   lightAirVaneSpin,
-  marinaFridgeFailure,
   quietNight,
   slowDrag,
   sourceDisconnect,

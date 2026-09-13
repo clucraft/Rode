@@ -6,6 +6,7 @@ import {
   NudgeRequest,
   SetDepthRequest,
   SetRadiusRequest,
+  SetRodeRequest,
   SetTideRequest,
   WeighRequest,
   type CommandResponse,
@@ -90,7 +91,9 @@ export function anchorRoutes(app: FastifyInstance, ctx: AppContext): void {
     return run({ type: 'ack', by: actorName(req) }, actorName(req));
   });
 
-  app.post('/api/anchor/marina', { preHandler: requireRole('crew') }, (req) => {
-    return run({ type: 'marina' }, actorName(req));
+  app.post('/api/anchor/rode', { preHandler: requireRole('crew') }, (req, reply) => {
+    const body = parseBody(SetRodeRequest, req, reply);
+    if (!body) return;
+    return run({ type: 'set-rode', rodeLength: body.rodeLength }, actorName(req));
   });
 }

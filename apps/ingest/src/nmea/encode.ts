@@ -147,6 +147,21 @@ export function encodeGGANoFix(epochMs: number, talker = 'GP'): string {
   ]);
 }
 
+/** Water speed (and optionally heading) from the log. */
+export function encodeVHW(stw: number, headingTrue: number | null = null, talker = 'VW'): string {
+  const kn = mpsToKnots(stw);
+  return buildSentence(`${talker}VHW`, [
+    headingTrue === null ? '' : deg(headingTrue),
+    'T',
+    '',
+    'M',
+    kn.toFixed(2),
+    'N',
+    (kn * 1.852).toFixed(2),
+    'K',
+  ]);
+}
+
 export function encodeVTG(cog: number, sog: number, talker = 'GP'): string {
   const kn = mpsToKnots(sog);
   return buildSentence(`${talker}VTG`, [

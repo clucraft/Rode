@@ -52,8 +52,20 @@ const POSITION_TYPES = new Set([1, 2, 3, 4, 9, 18, 19, 21, 27]);
 /** Message types that carry static data. */
 const STATIC_TYPES = new Set([5, 24]);
 
+/** How much of a target's track is kept; the Traffic screen draws it. */
+export const AIS_TRACK_MS = 60 * 60_000;
+/** Class A reports every few seconds; thinning keeps an hour to a few hundred points. */
+const TRACK_MIN_SPACING_MS = 10_000;
+
+export interface AisTrackPoint {
+  at: number;
+  lat: number;
+  lon: number;
+}
+
 export class AisTracker {
   private readonly targets = new Map<string, AisTarget>();
+  private readonly tracks = new Map<string, AisTrackPoint[]>();
   /** ggencoder's multipart reassembly state. */
   private session: Record<string, unknown> = {};
   /** Decodes that produced neither a position nor static data. */
@@ -113,6 +125,7 @@ export class AisTracker {
         t.lat = d.lat;
         t.lon = d.lon;
         t.lastPositionAt = now;
+        this.recordTrack(mmsi, d.lat, d.lon, now);
       }
       if (isNum(d.sog) && d.sog < 102.3) t.sog = knotsToMps(d.sog);
       if (isNum(d.cog) && d.cog < 360) t.cog = degToRad(d.cog);
@@ -139,6 +152,23 @@ export class AisTracker {
     return this.targets.get(mmsi);
   }
 
+  private recordTrack(mmsi: string, lat: number, lon: number, now: number): void {
+    const track = this.tracks.get(mmsi) ?? [];
+    const last = track[track.length - 1];
+    if (last && now - last.at < TRACK_MIN_SPACING_MS) return;
+    track.push({ at: now, lat, lon });
+    // Drop what is older than the window from the front.
+    let cut = 0;
+    while (cut < track.length && now - (track[cut]?.at ?? now) > AIS_TRACK_MS) cut++;
+    this.tracks.set(mmsi, cut > 0 ? track.slice(cut) : track);
+  }
+
+  /** The last hour of positions for a target, oldest first; empty when unknown. */
+  track(mmsi: string, now: number): AisTrackPoint[] {
+    const track = this.tracks.get(mmsi) ?? [];
+    return track.filter((p) => now - p.at <= AIS_TRACK_MS);
+  }
+
   all(): AisTarget[] {
     return [...this.targets.values()];
   }
@@ -149,6 +179,8 @@ export class AisTracker {
     for (const [mmsi, t] of this.targets) {
       if (now - t.lastSeen > maxAgeMs) {
         this.targets.delete(mmsi);
+        // A target that has timed out takes its history with it.
+        this.tracks.delete(mmsi);
         removed.push(mmsi);
       }
     }
@@ -157,6 +189,7 @@ export class AisTracker {
 
   reset(): void {
     this.targets.clear();
+    this.tracks.clear();
     this.session = {};
   }
 }

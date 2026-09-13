@@ -15,7 +15,6 @@ describe('alarm config', () => {
 
   it('ships the field-tested defaults', () => {
     expect(DEFAULT_ALARM_CONFIG.warnDistance).toBe(10);
-    expect(DEFAULT_ALARM_CONFIG.awaMinWindSpeed).toBeCloseTo(knotsToMps(5));
     expect(DEFAULT_ALARM_CONFIG.sogThreshold).toBeCloseTo(knotsToMps(1.2));
     expect(DEFAULT_ALARM_CONFIG.gpsStaleWarnMs).toBe(30_000);
     expect(DEFAULT_ALARM_CONFIG.gpsStaleCriticalMs).toBe(60_000);

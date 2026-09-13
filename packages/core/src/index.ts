@@ -12,4 +12,4 @@ export * from './geometry.js';
 export * from './detectors.js';
 export * from './zones.js';
 export * from './anchor.js';
-export * from './marina.js';
+export * from './wind.js';

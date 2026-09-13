@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchOf } from './patch.js';
 
 /*
  * Notification configuration and delivery records.
@@ -118,7 +119,7 @@ export const NotificationSettings = z.object({
 });
 export type NotificationSettings = z.infer<typeof NotificationSettings>;
 
-export const NotificationSettingsPatch = NotificationSettings.partial();
+export const NotificationSettingsPatch = patchOf(NotificationSettings);
 export type NotificationSettingsPatch = z.infer<typeof NotificationSettingsPatch>;
 
 /** What a delivery attempt logs. */

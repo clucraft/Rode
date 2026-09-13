@@ -1,4 +1,4 @@
-import { degToRad, knotsToMps } from './units.js';
+import { knotsToMps } from './units.js';
 
 /**
  * Every tunable the alarm engine reads, in SI. The defaults below are not
@@ -21,12 +21,6 @@ export interface AlarmConfig {
   positionHoldMs: number;
   /** How long the position must stay outside the circle before the alarm fires, ms. */
   outsideHoldMs: number;
-  /** Apparent wind angle window either side of the bow, radians. */
-  awaWindow: number;
-  /** Wind angle must stay outside the window this long, ms. */
-  awaHoldMs: number;
-  /** Below this apparent wind speed the wind-angle detector is suppressed, m/s. */
-  awaMinWindSpeed: number;
   /** SOG above which the speed detector counts, m/s. */
   sogThreshold: number;
   /** SOG must exceed the threshold this long, ms. */
@@ -54,12 +48,6 @@ export interface AlarmConfig {
   /** Zone conditions must persist this long, ms. */
   zoneHoldMs: number;
 
-  // ---- marina
-  /** Radius applied around the recorded position in marina mode, metres. */
-  marinaRadius: number;
-  /** SOG threshold in marina mode, m/s. */
-  marinaSogThreshold: number;
-
   // ---- acknowledgement
   /** How long an ack silences audio, ms. The condition itself is never cleared by an ack. */
   snoozeMs: number;
@@ -73,9 +61,6 @@ export const DEFAULT_ALARM_CONFIG: AlarmConfig = {
   warnDistance: 10,
   positionHoldMs: 10_000,
   outsideHoldMs: 5_000,
-  awaWindow: degToRad(70),
-  awaHoldMs: 30_000,
-  awaMinWindSpeed: knotsToMps(5),
   sogThreshold: knotsToMps(1.2),
   sogHoldMs: 30_000,
   clearHoldMs: 10_000,
@@ -89,9 +74,6 @@ export const DEFAULT_ALARM_CONFIG: AlarmConfig = {
 
   zoneLookaheadMs: 5 * 60_000,
   zoneHoldMs: 5_000,
-
-  marinaRadius: 25,
-  marinaSogThreshold: knotsToMps(1.2),
 
   snoozeMs: 10 * 60_000,
 };
@@ -153,27 +135,6 @@ export const ALARM_CONFIG_DOCS: Record<keyof AlarmConfig, ConfigDoc> = {
     why: 'Short, because this is the primary alarm; long enough that one glitched fix cannot fire it.',
     min: 0,
     max: 60_000,
-  },
-  awaWindow: {
-    label: 'Wind angle window',
-    unit: 'rad',
-    why: 'An anchored boat lies within about 70° of the wind. Outside that for long, the anchor is no longer holding the bow up.',
-    min: degToRad(10),
-    max: degToRad(170),
-  },
-  awaHoldMs: {
-    label: 'Wind angle hold',
-    unit: 'ms',
-    why: 'Boats sail around their anchor in gusts. Thirty seconds outside the window is a trend, not a gust.',
-    min: 0,
-    max: 300_000,
-  },
-  awaMinWindSpeed: {
-    label: 'Wind detector floor',
-    unit: 'm/s',
-    why: 'A wind vane spins freely in light air and reports garbage. Below 5 kn the detector is off, otherwise the calmest nights produce the most false alarms.',
-    min: 0,
-    max: knotsToMps(15),
   },
   sogThreshold: {
     label: 'Speed threshold',
@@ -244,20 +205,6 @@ export const ALARM_CONFIG_DOCS: Record<keyof AlarmConfig, ConfigDoc> = {
     why: 'Same hysteresis logic as the swing circle: one fix inside a zone is noise, five seconds is a boat.',
     min: 0,
     max: 60_000,
-  },
-  marinaRadius: {
-    label: 'Marina radius',
-    unit: 'm',
-    why: 'A boat in a slip moves a few metres on its lines. Twenty-five metres is outside any slip and still inside GPS sanity.',
-    min: 5,
-    max: 200,
-  },
-  marinaSogThreshold: {
-    label: 'Marina speed threshold',
-    unit: 'm/s',
-    why: 'A boat moving in a marina is always wrong; the threshold only exists to sit above GPS noise.',
-    min: 0,
-    max: knotsToMps(5),
   },
   snoozeMs: {
     label: 'Acknowledge snooze',

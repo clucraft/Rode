@@ -65,6 +65,12 @@ export class SampleWriter {
       return stale(f, maxAge) || typeof f?.value !== 'number' ? null : f.value;
     };
     const extra: Record<string, number> = {};
+    // Water speed and barometer ride in the JSON column: no schema change, and
+    // the Data screen's rolling charts read them back through /api/series.
+    const stw = num('stw');
+    if (stw !== null) extra.stw = Math.round(stw * 1000) / 1000;
+    const pressure = num('pressure', 15 * 60_000);
+    if (pressure !== null) extra.pressure = Math.round(pressure);
     for (const name of [
       'batterySoc',
       'batteryVoltage',

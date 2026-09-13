@@ -43,8 +43,6 @@ export interface EngineHostOptions {
   log: Logger;
   /** Latest telemetry snapshot, evaluated at `now`. */
   telemetry: (now: number) => Telemetry;
-  /** Local hour for the solar window, or null when unknown. */
-  localHour: (now: number) => number | null;
   now?: () => number;
 }
 
@@ -113,8 +111,6 @@ export class EngineHost {
       config: s.alarm(),
       boat: s.boat(),
       zones: this.opts.repos.zones.active(),
-      marinaConfig: s.marina(),
-      localHour: this.opts.localHour(now),
       suggestedScope: s.suggestedScope(),
       newId: () => randomUUID(),
     };
@@ -220,15 +216,27 @@ export class EngineHost {
       case 'anchor-set':
       case 'anchor-nudged':
       case 'tide-updated':
+      case 'rode-entered':
       case 'radius-overridden':
       case 'radius-override-cleared':
       case 'geometry-recomputed':
-      case 'marina-started':
         this.opts.repos.sessions.upsert(s);
         break;
-      case 'session-ended':
+      case 'session-ended': {
         this.opts.repos.sessions.upsert(s, by ?? e.by);
+        // Exclusion zones belong to the anchorage; weighing leaves it.
+        const cleared = this.opts.repos.zones.deleteAll();
+        if (cleared > 0) {
+          this.opts.repos.events.append(
+            'zones-cleared',
+            { count: cleared, sessionId: s.id, by: by ?? e.by },
+            'info',
+            e.at,
+            s.id,
+          );
+        }
         break;
+      }
       case 'condition-raised':
         this.opts.repos.sessions.bumpStats(
           s.id,
@@ -264,7 +272,6 @@ export class EngineHost {
       snoozed: isSnoozed(this.state, now),
       refires: this.state.refires,
       live: this.state.live,
-      marina: this.state.marina,
     };
   }
 }

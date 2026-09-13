@@ -94,7 +94,6 @@ export function createServices(opts: ServiceOptions): Services {
     settings,
     log,
     telemetry: (t) => ingest.normalizer.snapshot(t),
-    localHour: (t) => localHour(t, settings.view().timeZone),
     now,
   });
 

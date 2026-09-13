@@ -8,7 +8,6 @@ import {
   type BoatGeometry,
   type Command,
   type LatLon,
-  type MarinaConfig,
 } from '@rode/core';
 
 /*
@@ -85,9 +84,6 @@ export interface Scenario {
   startEpochMs: number;
   boat: BoatGeometry;
   alarmConfig?: Partial<AlarmConfig>;
-  marinaConfig?: Partial<MarinaConfig>;
-  /** Local hour offset from UTC for the solar window, hours. */
-  utcOffsetHours?: number;
   commands: ScenarioCommand[];
   state: (t: number) => BoatState;
   /** Optional power-cut simulation for the runner: ticks stop at `cutAt` and resume at `restartAt`. */

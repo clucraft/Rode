@@ -201,9 +201,9 @@ export class SessionsRepo extends Repo {
         s.geometry || s.radiusOverride
           ? JSON.stringify({ ...(s.geometry ?? {}), radiusOverride: s.radiusOverride ?? null })
           : null,
-      marina_lat: s.marinaCentre?.lat ?? null,
-      marina_lon: s.marinaCentre?.lon ?? null,
-      marina_radius: s.marinaRadius,
+      marina_lat: null,
+      marina_lon: null,
+      marina_radius: null,
     });
   }
 
@@ -508,6 +508,15 @@ export class ZonesRepo extends Repo {
 
   delete(id: string): boolean {
     return this.delete_.run(id).changes > 0;
+  }
+
+  /** Weighing anchor leaves the anchorage; its zones go with it. Returns how many. */
+  deleteAll(): number {
+    return this.stmt('DELETE FROM zones').run().changes;
+  }
+
+  count(): number {
+    return (this.stmt('SELECT COUNT(*) AS n FROM zones').get() as { n: number }).n;
   }
 }
 

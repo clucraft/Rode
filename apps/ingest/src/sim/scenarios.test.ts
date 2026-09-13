@@ -7,7 +7,6 @@ import {
   gpsNoiseFloor,
   hardPowerCut,
   lightAirVaneSpin,
-  marinaFridgeFailure,
   quietNight,
   SCENARIOS,
   slowDrag,
@@ -39,8 +38,8 @@ const secondsAfterStart = (e: EngineEvent | undefined, start: number) =>
 
 describe('scenario fixtures', () => {
   it('are all registered with unique ids and an expectation', () => {
-    expect(SCENARIOS).toHaveLength(10);
-    expect(new Set(SCENARIOS.map((s) => s.id)).size).toBe(10);
+    expect(SCENARIOS).toHaveLength(9);
+    expect(new Set(SCENARIOS.map((s) => s.id)).size).toBe(9);
     for (const s of SCENARIOS) {
       expect(s.expectation.length).toBeGreaterThan(20);
       expect(s.durationS).toBeGreaterThan(0);
@@ -100,32 +99,25 @@ describe('2. slow drag', () => {
 });
 
 describe('3. break-out', () => {
-  it('escalates to critical via the combined detector before the position alarm', () => {
+  it('warns on speed while still inside the circle, then alarms on position', () => {
     const r = runScenario(breakOut);
-    const wind = raised(r.events, 'wind-shift')[0];
     const speed = raised(r.events, 'speed')[0];
-    const breakout = raised(r.events, 'breakout')[0];
     const outside = raised(r.events, 'position-outside')[0];
-    expect(wind).toBeDefined();
     expect(speed).toBeDefined();
-    expect(breakout).toBeDefined();
     expect(outside).toBeDefined();
-    expect(breakout?.at).toBeLessThan(outside?.at ?? 0);
-    // Break-out fires ~30 s (the hold) after the boat starts sailing at t=600.
-    const tBreak = secondsAfterStart(breakout, breakOut.startEpochMs);
-    expect(tBreak).toBeGreaterThanOrEqual(628);
-    expect(tBreak).toBeLessThanOrEqual(640);
-    // The first ALARM state is caused by the break-out, not the circle.
-    const firstAlarm = r.stateTimeline.find((s) => s.to === 'ALARM');
-    expect(firstAlarm?.t).toBe(Math.round(tBreak));
+    expect(speed?.at).toBeLessThan(outside?.at ?? 0);
+    // The speed warning fires ~30 s (the hold) after the boat starts sailing at t=600.
+    const tSpeed = secondsAfterStart(speed, breakOut.startEpochMs);
+    expect(tSpeed).toBeGreaterThanOrEqual(628);
+    expect(tSpeed).toBeLessThanOrEqual(640);
+    expect(raisedIds(r.events)).not.toContain('wind-shift');
     expect(r.finalState.stateName).toBe('ALARM');
   });
 });
 
 describe('4. light-air vane spin', () => {
-  it('never raises a wind-shift warning under 5 kn', () => {
+  it('never raises anything while the vane wanders', () => {
     const r = runScenario(lightAirVaneSpin);
-    expect(raised(r.events, 'wind-shift')).toEqual([]);
     expect(raisedIds(r.events)).toEqual([]);
     expect(r.finalState.stateName).toBe('SET');
     // Make sure the scenario actually exercised the detector's suppression:
@@ -219,27 +211,7 @@ describe('8. hard power cut', () => {
   });
 });
 
-describe('9. marina fridge failure', () => {
-  it('reports every band transition including into "off", and the failure does not hide', () => {
-    const r = runScenario(marinaFridgeFailure);
-    const bands = r.events
-      .filter((e) => e.type === 'cold-box-band-changed' && e.box === 'freezer')
-      .map((e) => (e.type === 'cold-box-band-changed' ? `${e.from}>${e.to}` : ''));
-    expect(bands).toEqual(['unknown>normal', 'normal>warm', 'warm>failing', 'failing>off']);
-    expect(raised(r.events, 'freezer-warm')).toHaveLength(1);
-    expect(raised(r.events, 'freezer-failing')).toHaveLength(1);
-    expect(cleared(r.events, 'freezer-failing')).toHaveLength(1);
-    // The trap: at the end the box reads "off" and there is no active alarm.
-    expect(r.finalState.conditions).toEqual({});
-    expect(r.finalState.marina.freezer.band).toBe('off');
-    expect(r.finalState.marina.fridge.band).toBe('normal');
-    // Marina mode never touched wind, position or speed despite the vane spinning.
-    expect(raisedIds(r.events).sort()).toEqual(['freezer-failing', 'freezer-warm']);
-    expect(r.stateTimeline.map((s) => s.to)).toEqual(['MARINA', 'WARNING', 'ALARM', 'MARINA']);
-  });
-});
-
-describe('10. tidal swing', () => {
+describe('9. tidal swing', () => {
   it('keeps scope off the captured drop depth while the live depth moves', () => {
     let minDepth = Infinity;
     let maxDepth = -Infinity;

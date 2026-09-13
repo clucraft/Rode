@@ -9,15 +9,6 @@ import {
 } from './geometry.js';
 import type { BoatGeometry, LatLon, Severity, Telemetry } from './types.js';
 import { evaluateZone, type ExclusionZone } from './zones.js';
-import {
-  createMarinaState,
-  stepMarina,
-  type ColdBand,
-  type ColdBox,
-  type MarinaConfig,
-  type MarinaConditionKey,
-  type MarinaState,
-} from './marina.js';
 
 /*
  * The anchor watch as a pure state machine.
@@ -26,8 +17,6 @@ import {
  *     ^                │                   │       │          │
  *     │                │                   └───────┴──ack─────┘
  *     └────────weigh───┴───────────────────────────┘
- *
- *   IDLE ──marina──> MARINA ──> WARNING/ALARM
  *
  * WARNING and ALARM are not stored phases: they are derived from the set of
  * active conditions, each of which carries a severity. That is what makes
@@ -39,22 +28,20 @@ import {
  * JSON-serialisable so the host can persist it verbatim and rehydrate on boot.
  */
 
-export type WatchPhase = 'IDLE' | 'DROPPING' | 'SET' | 'MARINA';
+export type WatchPhase = 'IDLE' | 'DROPPING' | 'SET';
 export type WatchStateName = WatchPhase | 'WARNING' | 'ALARM';
+/** Only anchor sessions exist now; 'marina' survives in old history rows. */
 export type SessionMode = 'anchor' | 'marina';
 
 export type ConditionId =
   | 'position-warning'
   | 'position-outside'
-  | 'wind-shift'
   | 'speed'
-  | 'breakout'
   | 'gps-stale'
   | 'source-disconnected'
   | 'depth-shallow'
   | 'zone-breach'
-  | 'zone-projected'
-  | MarinaConditionKey;
+  | 'zone-projected';
 
 export type ConditionValues = Record<string, number | string | boolean | null>;
 
@@ -91,7 +78,6 @@ export interface AnchorSession {
   startedAt: number;
   endedAt: number | null;
 
-  // ---- anchor mode
   /** Bow-roller-corrected position when the anchor hit bottom. */
   dropPosition: LatLon | null;
   dropAt: number | null;
@@ -105,13 +91,14 @@ export interface AnchorSession {
   setPosition: LatLon | null;
   setAt: number | null;
   tideRange: number;
+  /**
+   * Rode actually paid out, entered by the skipper, metres. When set the
+   * circle is derived from it rather than from the measured run at set.
+   */
+  rodeOverride: number | null;
   geometry: AnchorGeometry | null;
   /** Manual circle, if the skipper has edited it; the computed geometry is kept alongside. */
   radiusOverride: RadiusOverride | null;
-
-  // ---- marina mode
-  marinaCentre: LatLon | null;
-  marinaRadius: number | null;
 }
 
 /** The circle the engine is actually watching: the override if set, else the computed one. */
@@ -121,10 +108,7 @@ export interface EffectiveRadii {
   manual: boolean;
 }
 
-export function effectiveRadii(
-  session: AnchorSession | null,
-  config: Pick<AlarmConfig, 'marinaRadius' | 'warnDistance'>,
-): EffectiveRadii | null {
+export function effectiveRadii(session: AnchorSession | null): EffectiveRadii | null {
   if (!session) return null;
   if (session.radiusOverride) {
     return {
@@ -132,10 +116,6 @@ export function effectiveRadii(
       warnRadius: session.radiusOverride.warnRadius,
       manual: true,
     };
-  }
-  if (session.mode === 'marina') {
-    const r = session.marinaRadius ?? config.marinaRadius;
-    return { swingRadius: r, warnRadius: Math.max(0, r - config.warnDistance), manual: false };
   }
   if (!session.geometry) return null;
   return {
@@ -176,7 +156,6 @@ export interface WatchState {
   detectors: {
     positionWarning: SustainedState;
     positionOutside: SustainedState;
-    windShift: SustainedState;
     speed: SustainedState;
     depth: SustainedState;
     zones: Record<string, { breach: SustainedState; projected: SustainedState }>;
@@ -189,8 +168,6 @@ export interface WatchState {
   /** Times the alarm has re-fired after a snooze in this alarm episode. */
   refires: number;
   live: LiveValues;
-  /** Refrigeration / battery / solar monitors; only stepped in MARINA. */
-  marina: MarinaState;
 }
 
 export type EngineEvent = { at: number } & (
@@ -208,6 +185,13 @@ export type EngineEvent = { at: number } & (
   | { type: 'anchor-nudged'; sessionId: string; from: LatLon; to: LatLon; geometry: AnchorGeometry }
   | { type: 'tide-updated'; sessionId: string; tideRange: number; geometry: AnchorGeometry }
   | {
+      /** Skipper entered the rode paid out; null means back to the measured run. */
+      type: 'rode-entered';
+      sessionId: string;
+      rodeLength: number | null;
+      geometry: AnchorGeometry | null;
+    }
+  | {
       type: 'radius-overridden';
       sessionId: string;
       override: RadiusOverride;
@@ -219,11 +203,9 @@ export type EngineEvent = { at: number } & (
       type: 'geometry-recomputed';
       sessionId: string;
       geometry: AnchorGeometry | null;
-      marinaRadius: number | null;
       swingRadius: number;
       warnRadius: number;
     }
-  | { type: 'marina-started'; sessionId: string; centre: LatLon; radius: number }
   | { type: 'session-ended'; sessionId: string; mode: SessionMode; durationMs: number; by: string }
   | { type: 'condition-raised'; condition: ActiveCondition }
   | { type: 'condition-escalated'; condition: ActiveCondition; previousSeverity: Severity }
@@ -245,14 +227,6 @@ export type EngineEvent = { at: number } & (
     }
   | { type: 'alarm-refire'; refires: number; conditions: string[]; values: ConditionValues }
   | { type: 'command-rejected'; command: Command['type']; reason: string; message: string }
-  | {
-      type: 'cold-box-band-changed';
-      box: ColdBox;
-      from: ColdBand;
-      to: ColdBand;
-      temp: number | null;
-      ambient: number | null;
-    }
 );
 
 export type Command =
@@ -261,6 +235,11 @@ export type Command =
   | { type: 'set' }
   | { type: 'nudge'; anchor: LatLon }
   | { type: 'set-tide'; tideRange: number }
+  | {
+      /** Rode paid out, metres; null returns to the run measured at set. */
+      type: 'set-rode';
+      rodeLength: number | null;
+    }
   | {
       /**
        * Replace the watched circle. In linked mode one radius is enough and the
@@ -275,12 +254,11 @@ export type Command =
     }
   | { type: 'clear-radius'; by: string }
   | {
-      /** Settings changed: re-derive geometry and marina radius for the active session. */
+      /** Settings changed: re-derive geometry for the active session. */
       type: 'recompute';
     }
   | { type: 'weigh'; by?: string }
-  | { type: 'ack'; by: string }
-  | { type: 'marina' };
+  | { type: 'ack'; by: string };
 
 export interface EngineContext {
   now: number;
@@ -288,9 +266,6 @@ export interface EngineContext {
   config: AlarmConfig;
   boat: BoatGeometry;
   zones: readonly ExclusionZone[];
-  marinaConfig: MarinaConfig;
-  /** Local hour of day (0–23) for the solar window; null when the clock is not synced. */
-  localHour?: number | null;
   /** Session id generator. Injected so the core stays pure and tests stay deterministic. */
   newId: () => string;
   /** Target scope used for the IDLE rode suggestion. Default 5. */
@@ -304,9 +279,8 @@ export interface StepResult {
 
 /** Position samples older than this are not usable for geometry. */
 const POSITION_MAX_AGE_MS = 10_000;
-/** Heading/COG/SOG/wind/depth samples older than this are treated as absent. */
+/** Heading/COG/SOG/depth samples older than this are treated as absent. */
 const INSTRUMENT_MAX_AGE_MS = 15_000;
-/** Distance ring inside which a projected-breach warning is meaningful. */
 const DEFAULT_SUGGESTED_SCOPE = 5;
 
 export function createWatchState(now: number): WatchState {
@@ -321,7 +295,6 @@ export function createWatchState(now: number): WatchState {
     ack: null,
     refires: 0,
     live: emptyLive(),
-    marina: createMarinaState(),
   };
 }
 
@@ -330,14 +303,50 @@ export function createWatchState(now: number): WatchState {
  * are kept (the boat did not stop moving while we were down) but the
  * observation clock restarts so GPS staleness is measured from now, not from
  * the last sample before the power cut.
+ *
+ * State written by older versions is brought forward here: fields that did
+ * not exist get their defaults, and a marina session (a mode that no longer
+ * exists) is ended rather than resumed.
  */
 export function rehydrateWatchState(persisted: WatchState, now: number): WatchState {
+  const raw = persisted as Omit<WatchState, 'phase'> & {
+    phase: WatchPhase | 'MARINA';
+    marina?: unknown;
+    detectors: WatchState['detectors'] & { windShift?: unknown };
+  };
+  const legacyMarina = raw.phase === 'MARINA' || raw.session?.mode === 'marina';
+  const session: AnchorSession | null = raw.session
+    ? {
+        ...raw.session,
+        rodeOverride: raw.session.rodeOverride ?? null,
+        radiusOverride: raw.session.radiusOverride ?? null,
+        endedAt: legacyMarina ? (raw.session.endedAt ?? now) : raw.session.endedAt,
+      }
+    : null;
+  const { marina: _marina, ...rest } = raw;
+  const { windShift: _windShift, ...detectors } = rest.detectors;
+  const conditions: Record<string, ActiveCondition> = {};
+  const gone = new Set([
+    'wind-shift',
+    'breakout',
+    'fridge-warm',
+    'fridge-failing',
+    'freezer-warm',
+    'freezer-failing',
+    'battery-low',
+    'solar-no-yield',
+  ]);
+  for (const [k, c] of Object.entries(rest.conditions)) {
+    // Conditions from detectors that no longer exist must not linger.
+    if (!gone.has(k)) conditions[k] = c;
+  }
   return {
-    ...persisted,
-    // Sessions persisted before manual radii existed have no override field.
-    session: persisted.session
-      ? { ...persisted.session, radiusOverride: persisted.session.radiusOverride ?? null }
-      : null,
+    ...rest,
+    phase: legacyMarina || rest.phase === 'MARINA' ? 'IDLE' : rest.phase,
+    stateName: legacyMarina ? 'IDLE' : rest.stateName,
+    session,
+    conditions: legacyMarina ? {} : conditions,
+    detectors: legacyMarina ? freshDetectors() : detectors,
     observingSince: now,
     lastPositionAt: null,
     live: emptyLive(),
@@ -348,7 +357,6 @@ function freshDetectors(): WatchState['detectors'] {
   return {
     positionWarning: sustainedInit(),
     positionOutside: sustainedInit(),
-    windShift: sustainedInit(),
     speed: sustainedInit(),
     depth: sustainedInit(),
     zones: {},
@@ -381,6 +389,8 @@ export function applyCommand(state: WatchState, cmd: Command, ctx: EngineContext
       return nudge(state, cmd, ctx);
     case 'set-tide':
       return setTide(state, cmd, ctx);
+    case 'set-rode':
+      return setRode(state, cmd, ctx);
     case 'set-radius':
       return setRadius(state, cmd, ctx);
     case 'clear-radius':
@@ -391,8 +401,6 @@ export function applyCommand(state: WatchState, cmd: Command, ctx: EngineContext
       return weigh(state, cmd, ctx);
     case 'ack':
       return ack(state, cmd, ctx);
-    case 'marina':
-      return marina(state, ctx);
   }
 }
 
@@ -462,10 +470,9 @@ function drop(state: WatchState, cmd: { manualDepth?: number }, ctx: EngineConte
     setPosition: null,
     setAt: null,
     tideRange: 0,
+    rodeOverride: null,
     geometry: null,
     radiusOverride: null,
-    marinaCentre: null,
-    marinaRadius: null,
   };
 
   const next: WatchState = {
@@ -494,7 +501,7 @@ function drop(state: WatchState, cmd: { manualDepth?: number }, ctx: EngineConte
 
 function setDepth(state: WatchState, cmd: { depth: number }, ctx: EngineContext): StepResult {
   const { now } = ctx;
-  if (state.session?.mode !== 'anchor') {
+  if (!state.session || state.phase === 'IDLE') {
     return reject(state, 'set-depth', 'no-session', 'No anchor session is active.', now);
   }
   if (!Number.isFinite(cmd.depth) || cmd.depth < 0) {
@@ -575,6 +582,7 @@ function geometryFor(session: AnchorSession, ctx: EngineContext): AnchorGeometry
     setPosition: session.setPosition,
     depthAtDrop: session.depthAtDrop,
     tideRange: session.tideRange,
+    rodeLength: session.rodeOverride,
     hdop: session.geometry?.hdopAtSet ?? fresh(ctx.telemetry.hdop, ctx.now, INSTRUMENT_MAX_AGE_MS),
     boat: ctx.boat,
     config: ctx.config,
@@ -623,7 +631,7 @@ function nudge(state: WatchState, cmd: { anchor: LatLon }, ctx: EngineContext): 
 
 function setTide(state: WatchState, cmd: { tideRange: number }, ctx: EngineContext): StepResult {
   const { now } = ctx;
-  if (state.session?.mode !== 'anchor') {
+  if (!state.session || state.phase === 'IDLE') {
     return reject(state, 'set-tide', 'no-session', 'No anchor session is active.', now);
   }
   if (!Number.isFinite(cmd.tideRange) || cmd.tideRange < 0) {
@@ -644,6 +652,71 @@ function setTide(state: WatchState, cmd: { tideRange: number }, ctx: EngineConte
   return { state: { ...state, session }, events };
 }
 
+/** Longest rode anyone carries; anything bigger is a typo. */
+const MAX_RODE_M = 500;
+
+/**
+ * The skipper knows how much rode went out (chain markers, a counter). With
+ * it the circle no longer depends on how far the boat happened to lie when
+ * "set" was pressed: run = sqrt(rode² − vertical²). Null goes back to the
+ * measured run.
+ */
+function setRode(
+  state: WatchState,
+  cmd: { rodeLength: number | null },
+  ctx: EngineContext,
+): StepResult {
+  const { now } = ctx;
+  if (!state.session || state.phase === 'IDLE') {
+    return reject(state, 'set-rode', 'no-session', 'No anchor session is active.', now);
+  }
+  if (cmd.rodeLength !== null) {
+    if (!Number.isFinite(cmd.rodeLength) || cmd.rodeLength <= 0 || cmd.rodeLength > MAX_RODE_M) {
+      return reject(
+        state,
+        'set-rode',
+        'invalid-rode',
+        `Rode must be between 0 and ${String(MAX_RODE_M)} m.`,
+        now,
+      );
+    }
+    const vertical = (state.session.depthAtDrop ?? 0) + ctx.boat.bowRollerHeight;
+    if (cmd.rodeLength < vertical) {
+      return reject(
+        state,
+        'set-rode',
+        'rode-too-short',
+        'That is less rode than the depth plus the bow roller height.',
+        now,
+      );
+    }
+  }
+  const session: AnchorSession = { ...state.session, rodeOverride: cmd.rodeLength };
+  if (session.geometry) session.geometry = geometryFor(session, ctx);
+  const events: EngineEvent[] = [
+    {
+      at: now,
+      type: 'rode-entered',
+      sessionId: session.id,
+      rodeLength: cmd.rodeLength,
+      geometry: session.geometry,
+    },
+  ];
+  // The circle may have moved under the boat: restart the position timers.
+  return {
+    state: {
+      ...state,
+      session,
+      detectors: {
+        ...state.detectors,
+        positionWarning: sustainedInit(),
+        positionOutside: sustainedInit(),
+      },
+    },
+    events,
+  };
+}
+
 /** Smallest circle worth watching: below this the GPS noise alone would alarm. */
 const MIN_MANUAL_RADIUS = 5;
 /** Largest: anything bigger is a typo, not an anchorage. */
@@ -656,7 +729,7 @@ function setRadius(
 ): StepResult {
   const { now, config } = ctx;
   const session = state.session;
-  if (!session || (state.phase !== 'SET' && state.phase !== 'MARINA')) {
+  if (!session || state.phase !== 'SET') {
     return reject(
       state,
       'set-radius',
@@ -665,7 +738,7 @@ function setRadius(
       now,
     );
   }
-  const current = effectiveRadii(session, config);
+  const current = effectiveRadii(session);
   const given = (v: number | undefined): number | null =>
     v !== undefined && Number.isFinite(v) ? v : null;
   const swingIn = given(cmd.swingRadius);
@@ -707,7 +780,7 @@ function setRadius(
   }
 
   const override: RadiusOverride = { swingRadius, warnRadius, mode: cmd.mode, at: now, by: cmd.by };
-  const computed = computedRadii(session, config);
+  const computed = computedRadii(session);
   const next: AnchorSession = { ...session, radiusOverride: override };
   const events: EngineEvent[] = [
     { at: now, type: 'radius-overridden', sessionId: session.id, override, computed },
@@ -748,11 +821,8 @@ function clearRadius(state: WatchState, cmd: { by: string }, ctx: EngineContext)
 }
 
 /** What the settings alone would give, ignoring any override. */
-function computedRadii(
-  session: AnchorSession,
-  config: AlarmConfig,
-): { swingRadius: number; warnRadius: number } | null {
-  const r = effectiveRadii({ ...session, radiusOverride: null }, config);
+function computedRadii(session: AnchorSession): { swingRadius: number; warnRadius: number } | null {
+  const r = effectiveRadii({ ...session, radiusOverride: null });
   return r ? { swingRadius: r.swingRadius, warnRadius: r.warnRadius } : null;
 }
 
@@ -767,18 +837,17 @@ function recompute(state: WatchState, ctx: EngineContext): StepResult {
   const session = state.session;
   if (!session || state.phase === 'IDLE') return { state, events: [] };
   const next: AnchorSession = { ...session };
-  if (session.mode === 'anchor' && session.geometry && session.anchor && session.setPosition) {
+  if (session.geometry && session.anchor && session.setPosition) {
     next.geometry = geometryFor(session, ctx);
   }
-  if (session.mode === 'marina') next.marinaRadius = config.marinaRadius;
   if (session.radiusOverride?.mode === 'linked') {
     next.radiusOverride = {
       ...session.radiusOverride,
       warnRadius: Math.max(0, session.radiusOverride.swingRadius - config.warnDistance),
     };
   }
-  const before = effectiveRadii(session, config);
-  const after = effectiveRadii(next, config);
+  const before = effectiveRadii(session);
+  const after = effectiveRadii(next);
   const geometrySame =
     next.geometry === session.geometry ||
     (next.geometry !== null &&
@@ -788,7 +857,6 @@ function recompute(state: WatchState, ctx: EngineContext): StepResult {
       next.geometry.scopeRatio === session.geometry.scopeRatio);
   const unchanged =
     geometrySame &&
-    next.marinaRadius === session.marinaRadius &&
     before?.swingRadius === after?.swingRadius &&
     before?.warnRadius === after?.warnRadius;
   if (unchanged) return { state, events: [] };
@@ -798,7 +866,6 @@ function recompute(state: WatchState, ctx: EngineContext): StepResult {
       type: 'geometry-recomputed',
       sessionId: session.id,
       geometry: next.geometry,
-      marinaRadius: next.marinaRadius,
       swingRadius: after?.swingRadius ?? NaN,
       warnRadius: after?.warnRadius ?? NaN,
     },
@@ -867,64 +934,6 @@ function ack(state: WatchState, cmd: { by: string }, ctx: EngineContext): StepRe
   };
 }
 
-function marina(state: WatchState, ctx: EngineContext): StepResult {
-  const { now, config } = ctx;
-  if (state.phase === 'MARINA') return { state, events: [] };
-  if (state.phase !== 'IDLE') {
-    return reject(state, 'marina', 'not-idle', 'Weigh anchor before starting marina mode.', now);
-  }
-  const boat = currentBoatPosition(ctx);
-  if (!boat) {
-    return reject(
-      state,
-      'marina',
-      'position-required',
-      'No usable GPS fix. Wait for a position.',
-      now,
-    );
-  }
-  const session: AnchorSession = {
-    id: ctx.newId(),
-    mode: 'marina',
-    startedAt: now,
-    endedAt: null,
-    dropPosition: null,
-    dropAt: null,
-    dropCorrected: false,
-    depthAtDrop: null,
-    depthSource: null,
-    anchor: null,
-    setPosition: null,
-    setAt: null,
-    tideRange: 0,
-    geometry: null,
-    radiusOverride: null,
-    marinaCentre: boat.position,
-    marinaRadius: config.marinaRadius,
-  };
-  const next: WatchState = {
-    ...state,
-    phase: 'MARINA',
-    session,
-    conditions: {},
-    detectors: freshDetectors(),
-    ack: null,
-    refires: 0,
-    marina: createMarinaState(),
-  };
-  const events: EngineEvent[] = [
-    { at: now, type: 'session-started', sessionId: session.id, mode: 'marina' },
-    {
-      at: now,
-      type: 'marina-started',
-      sessionId: session.id,
-      centre: boat.position,
-      radius: config.marinaRadius,
-    },
-  ];
-  return finishTransition(state, next, events, now, { radius: config.marinaRadius });
-}
-
 /** Recompute the derived state name and append a state-changed event if it moved. */
 function finishTransition(
   prev: WatchState,
@@ -970,7 +979,7 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
     positionAgeS: Math.round(positionAgeMs / 1000),
   };
 
-  const watching = state.phase === 'SET' || state.phase === 'MARINA';
+  const watching = state.phase === 'SET';
   const session = state.session;
 
   // IDLE: only the rode suggestion.
@@ -991,13 +1000,8 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
   const raised: ActiveCondition[] = [];
   const cleared: string[] = [];
 
-  // Reference geometry for anchor or marina.
-  const centre = session
-    ? session.mode === 'marina'
-      ? session.marinaCentre
-      : session.anchor
-    : null;
-  const radii = effectiveRadii(session, config);
+  const centre = session?.anchor ?? null;
+  const radii = effectiveRadii(session);
   const radius = radii?.swingRadius ?? null;
   const warnRadius = radii?.warnRadius ?? null;
 
@@ -1061,45 +1065,13 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
       posValues,
     );
 
-    // Speed detector: both modes.
-    const sogThreshold =
-      session?.mode === 'marina' ? config.marinaSogThreshold : config.sogThreshold;
-    const sogRaw = sog === null ? false : sog > sogThreshold;
+    // Speed detector: an anchored boat does not make way.
+    const sogRaw = sog === null ? false : sog > config.sogThreshold;
     const s = sustainedStep(det.speed, sogRaw, now, config.sogHoldMs, config.clearHoldMs);
     det.speed = s.state;
     syncCondition(state, raised, cleared, 'speed', det.speed.active, 'warning', now, {
       sog: round(sog),
-      threshold: round(sogThreshold),
-    });
-
-    // Wind-angle detector: anchor mode only. A docked boat does not weathervane.
-    if (session?.mode === 'anchor') {
-      const awa = fresh(telemetry.awa, now, INSTRUMENT_MAX_AGE_MS);
-      const aws = fresh(telemetry.aws, now, INSTRUMENT_MAX_AGE_MS);
-      // Suppressed (false, not null) below the wind floor: a free-spinning vane
-      // must not accumulate, and an active warning should clear.
-      const windRaw =
-        awa === null || aws === null || aws < config.awaMinWindSpeed
-          ? false
-          : Math.abs(awa) > config.awaWindow;
-      const wd = sustainedStep(det.windShift, windRaw, now, config.awaHoldMs, config.clearHoldMs);
-      det.windShift = wd.state;
-      syncCondition(state, raised, cleared, 'wind-shift', det.windShift.active, 'warning', now, {
-        awa: round(awa),
-        aws: round(aws),
-        window: round(config.awaWindow),
-      });
-    } else {
-      det.windShift = sustainedInit();
-      syncCondition(state, raised, cleared, 'wind-shift', false, 'warning', now, {});
-    }
-
-    // Break-out: both early-warning detectors at once is a boat that has let
-    // go and is moving. Straight to critical; bypasses Do Not Disturb.
-    const breakout = det.windShift.active && det.speed.active;
-    syncCondition(state, raised, cleared, 'breakout', breakout, 'critical', now, {
-      sog: round(sog),
-      awa: round(fresh(telemetry.awa, now, INSTRUMENT_MAX_AGE_MS)),
+      threshold: round(config.sogThreshold),
     });
 
     // Depth: only with a live sounder and a configured minimum.
@@ -1172,38 +1144,6 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
         syncCondition(state, raised, cleared, 'zone-breach', false, 'critical', now, {}, zoneId);
         syncCondition(state, raised, cleared, 'zone-projected', false, 'warning', now, {}, zoneId);
       }
-    }
-  }
-
-  // ---- marina monitors: refrigeration bands, battery, solar.
-  let marinaState = state.marina;
-  if (watching && session?.mode === 'marina') {
-    const m = stepMarina(state.marina, telemetry, ctx.marinaConfig, now, ctx.localHour ?? null);
-    marinaState = m.state;
-    for (const t of m.result.transitions) {
-      events.push({ at: now, type: 'cold-box-band-changed', ...t });
-    }
-    const wanted = new Map(m.result.conditions.map((c) => [c.key, c]));
-    const allKeys: MarinaConditionKey[] = [
-      'fridge-warm',
-      'fridge-failing',
-      'freezer-warm',
-      'freezer-failing',
-      'battery-low',
-      'solar-no-yield',
-    ];
-    for (const key of allKeys) {
-      const c = wanted.get(key);
-      syncCondition(
-        state,
-        raised,
-        cleared,
-        key,
-        c !== undefined,
-        c?.severity ?? 'warning',
-        now,
-        c?.values ?? {},
-      );
     }
   }
 
@@ -1304,7 +1244,6 @@ export function tick(state: WatchState, ctx: EngineContext): StepResult {
     ack: ackState,
     refires,
     live,
-    marina: marinaState,
   };
   return finishTransition(state, next, events, now, liveValuesFrom(live, sog));
 }

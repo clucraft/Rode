@@ -1,7 +1,9 @@
 import {
+  apparentWindDirection,
   celsiusToKelvin,
   normaliseAngle,
   normaliseRelativeAngle,
+  trueWind,
   type Field,
   type LatLon,
   type SourceState,
@@ -26,11 +28,13 @@ import { splitSentence } from './nmea/sentence.js';
 export type FieldName =
   | 'position'
   | 'sog'
+  | 'stw'
   | 'cog'
   | 'heading'
   | 'depth'
   | 'awa'
   | 'aws'
+  | 'awd'
   | 'twa'
   | 'tws'
   | 'twd'
@@ -52,11 +56,13 @@ export type FieldValue<N extends FieldName> = N extends 'position' ? LatLon : nu
 export const DEFAULT_MAX_AGE: Record<FieldName, number> = {
   position: 10_000,
   sog: 10_000,
+  stw: 10_000,
   cog: 10_000,
   heading: 10_000,
   depth: 30_000,
   awa: 10_000,
   aws: 10_000,
+  awd: 10_000,
   twa: 10_000,
   tws: 10_000,
   twd: 10_000,
@@ -111,7 +117,7 @@ export const DEFAULT_NORMALIZER_OPTIONS: NormalizerOptions = {
   magneticVariation: null,
   maxAge: {},
   xdrRules: DEFAULT_XDR_RULES,
-  aisMaxAgeMs: 20 * 60_000,
+  aisMaxAgeMs: 30 * 60_000,
 };
 
 export interface GpsTime {
@@ -273,6 +279,15 @@ export class Normalizer {
         else if (p.cogMagnetic !== null) {
           const v = this.variation();
           if (v !== null) set('cog', normaliseAngle(p.cogMagnetic + v));
+        }
+        break;
+      case 'VHW':
+        set('stw', p.stw);
+        // A log's heading is a fallback only; a real compass sentence wins by being fresher.
+        if (p.headingTrue !== null) {
+          const h = this.fields.get('heading');
+          if (!h || h.source.endsWith('VHW') || now - h.timestamp > DEFAULT_MAX_AGE.heading)
+            set('heading', normaliseAngle(p.headingTrue));
         }
         break;
       case 'ZDA':
@@ -458,7 +473,49 @@ export class Normalizer {
       const maxAge = this.options.maxAge[name] ?? DEFAULT_MAX_AGE[name];
       out[name] = { ...f, stale: now - f.timestamp > maxAge };
     }
+    this.deriveWind(out);
     return out;
+  }
+
+  /**
+   * Wind the instruments did not send but can be computed: the apparent wind
+   * direction over the ground (heading + AWA), and the true wind when no
+   * MWV(T)/MWD/MDA sentence supplies it. Derived fields are stale when any
+   * input is, and carry the oldest input's timestamp.
+   */
+  private deriveWind(out: Partial<Record<FieldName, Field<number | LatLon>>>): void {
+    const num = (name: FieldName): Field<number> | null => {
+      const f = out[name];
+      return f && typeof f.value === 'number' ? (f as Field<number>) : null;
+    };
+    const awa = num('awa');
+    const aws = num('aws');
+    const heading = num('heading');
+    if (!awa || !heading) return;
+    const stamp = (...fs: Field<number>[]) => ({
+      timestamp: Math.min(...fs.map((f) => f.timestamp)),
+      stale: fs.some((f) => f.stale),
+      source: 'derived',
+    });
+    out.awd = { value: apparentWindDirection(awa.value, heading.value), ...stamp(awa, heading) };
+    if (!aws) return;
+    const have = num('tws');
+    if (have && !have.stale) return;
+    // Over-ground motion when there is a fix; a stopped boat feels the true wind.
+    const sog = num('sog');
+    const cog = num('cog');
+    const moving = sog && cog && !sog.stale && !cog.stale;
+    const t = trueWind({
+      awa: awa.value,
+      aws: aws.value,
+      heading: heading.value,
+      speed: moving ? sog.value : 0,
+      course: moving ? cog.value : 0,
+    });
+    const inputs = moving ? [awa, aws, heading, sog, cog] : [awa, aws, heading];
+    out.tws = { value: t.tws, ...stamp(...inputs) };
+    out.twd = { value: t.twd, ...stamp(...inputs) };
+    out.twa = { value: t.twa, ...stamp(...inputs) };
   }
 
   /** Forget stale AIS targets. Call periodically. */

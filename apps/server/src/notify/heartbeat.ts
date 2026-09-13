@@ -114,7 +114,7 @@ export class Heartbeat {
       `GPS: ${pos && now - pos.timestamp < 30_000 ? 'ok' : 'STALE'}, time ${this.opts.gpsSynced() ? 'synced' : 'not synced'}`,
       `Battery: ${soc ? `${Math.round(soc.value * 100)}%` : 'n/a'}${volts ? ` ${volts.value.toFixed(2)} V` : ''}`,
       `Solar: ${solar ? `${Math.round(solar.value)} W` : 'n/a'}`,
-      `Fridge: ${temp(fridge?.value)} (${s.marina.fridge.band}), freezer: ${temp(freezer?.value)} (${s.marina.freezer.band})`,
+      `Fridge: ${temp(fridge?.value)}, freezer: ${temp(freezer?.value)}`,
       `Source: ${src.state.kind} for ${fmtDuration(now - src.state.since)}, reconnects ${String(src.stats.reconnects ?? 0)}`,
       `Uptime: ${fmtDuration(now - this.opts.bootedAt)}`,
     ];

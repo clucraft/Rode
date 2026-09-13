@@ -226,14 +226,6 @@ export class Dispatcher {
           data: { event: e.type, geometry: g },
         };
       }
-      case 'marina-started':
-        return {
-          ...base,
-          severity: 'info',
-          title: `${boat}: marina watch active`,
-          body: `Radius ${this.fmtDistance(e.radius)}. Position, speed, battery, solar and refrigeration are being watched.`,
-          data: { event: e.type },
-        };
       case 'session-ended':
         return {
           ...base,
@@ -260,7 +252,7 @@ export class Dispatcher {
             body: describeValues(e.values, this),
             data: { event: e.type, to: e.to, values: e.values },
           };
-        if ((e.from === 'ALARM' || e.from === 'WARNING') && (e.to === 'SET' || e.to === 'MARINA')) {
+        if ((e.from === 'ALARM' || e.from === 'WARNING') && e.to === 'SET') {
           return {
             ...base,
             severity: 'info',
@@ -291,20 +283,6 @@ export class Dispatcher {
           body: `Not acknowledged again. ${describeValues(e.values, this)} Conditions: ${e.conditions.join(', ')}.`,
           data: { event: e.type, refires: e.refires },
         };
-      case 'cold-box-band-changed': {
-        // Every transition is reported, including into "off": a freezer that
-        // fails while nobody is aboard ends up reading ambient, and only the
-        // trail of messages shows what happened.
-        const sev: Severity =
-          e.to === 'failing' ? 'critical' : e.to === 'warm' || e.to === 'off' ? 'warning' : 'info';
-        return {
-          ...base,
-          severity: sev,
-          title: `${boat}: ${e.box} ${e.to}`,
-          body: `${e.box} went from ${e.from} to ${e.to} at ${this.fmtTemp(e.temp)}${e.ambient !== null ? ` (cabin ${this.fmtTemp(e.ambient)})` : ''}.${e.to === 'off' ? ' It reads as switched off: check whether that was intended.' : ''}`,
-          data: { event: e.type, box: e.box, from: e.from, to: e.to },
-        };
-      }
       default:
         return null;
     }
@@ -487,20 +465,12 @@ export class Dispatcher {
 const CONDITION_TEXT: Record<string, string> = {
   'position-warning': 'near the edge of the swing circle',
   'position-outside': 'OUTSIDE THE SWING CIRCLE',
-  'wind-shift': 'wind off the bow',
   speed: 'moving',
-  breakout: 'BREAK-OUT: moving with the wind off the bow',
   'gps-stale': 'no GPS position',
   'source-disconnected': 'DATA SOURCE DISCONNECTED',
   'depth-shallow': 'SHALLOW WATER',
   'zone-breach': 'IN AN EXCLUSION ZONE',
   'zone-projected': 'heading for an exclusion zone',
-  'fridge-warm': 'fridge warm',
-  'fridge-failing': 'FRIDGE FAILING',
-  'freezer-warm': 'freezer warm',
-  'freezer-failing': 'FREEZER FAILING',
-  'battery-low': 'battery low',
-  'solar-no-yield': 'no solar yield',
 };
 
 function describeValues(

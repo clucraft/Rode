@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
 import type { FullState, ServerMessage } from '@rode/protocol';
 import { buildApp, mountApp, readinessFor } from './app.js';
+import { bucketSeries } from './routes/state.js';
 import { at, feed, run, setupAdmin, testEnv, type Client, type TestEnv } from './test/helpers.js';
 
 let env: TestEnv | null = null;
@@ -272,7 +273,7 @@ describe('admin API', () => {
   it('streams a consistent SQLite backup to admins only', async () => {
     const { app, env, c } = await boot();
     feed(env.services, env.clock);
-    await c.req({ method: 'POST', url: '/api/anchor/marina' });
+    await c.req({ method: 'POST', url: '/api/anchor/drop' });
     const res = await c.req({ method: 'GET', url: '/api/admin/backup' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toBe('application/vnd.sqlite3');
@@ -412,5 +413,104 @@ describe('imagery API', () => {
     expect(env.services.settings.prefs().imagerySource).toBeNull();
     // Ids survive a re-save.
     expect(res.json<{ sources: { id: string }[] }>().sources[0]?.id).toBe(local.id);
+  });
+});
+
+describe('v0.3: rode, zones on weigh, AIS tracks, bucketed series', () => {
+  it('takes an entered rode, clears zones on weigh, and serves AIS tracks', async () => {
+    const { env, c } = await boot();
+    const { services, clock } = env;
+    feed(services, clock, { depth: 5 });
+    await c.req({ method: 'POST', url: '/api/anchor/drop', payload: {} });
+    run(services, clock, 3, { position: at(0, 12) });
+    await c.req({ method: 'POST', url: '/api/anchor/set' });
+
+    let res = await c.req({ method: 'POST', url: '/api/anchor/rode', payload: { rodeLength: 40 } });
+    expect(res.json()).toEqual({ ok: true });
+    const g = services.engine.getState().session?.geometry;
+    expect(g?.rodeLength).toBe(40);
+    expect(g?.rodeEntered).toBe(true);
+    res = await c.req({ method: 'POST', url: '/api/anchor/rode', payload: { rodeLength: 2 } });
+    expect(res.json()).toMatchObject({ ok: false, reason: 'rode-too-short' });
+
+    // A zone exists; weighing removes it and logs the fact.
+    res = await c.req({
+      method: 'POST',
+      url: '/api/zones',
+      payload: {
+        name: 'Reef',
+        kind: 'never-enter',
+        polygon: [at(90, 300), at(120, 300), at(150, 300)],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(services.repos.zones.count()).toBe(1);
+    await c.req({ method: 'POST', url: '/api/anchor/weigh', payload: { confirm: true } });
+    expect(services.repos.zones.count()).toBe(0);
+    expect(services.repos.events.recent(20).map((e) => e.type)).toContain('zones-cleared');
+
+    // AIS track for an unknown target is empty, not an error.
+    res = await c.req({ method: 'GET', url: '/api/ais/123456789/track' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+
+    // The marina command is gone.
+    res = await c.req({ method: 'POST', url: '/api/anchor/marina' });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('buckets samples with a circular mean for wind direction', () => {
+    const rows = [
+      {
+        at: 1000,
+        sog: 1,
+        heading: 0,
+        awa: 6.2,
+        aws: 5,
+        depth: 4,
+        extra: '{"stw":0.9,"pressure":1010}',
+      },
+      { at: 2000, sog: 3, heading: 0, awa: 0.1, aws: 7, depth: 6, extra: '{"stw":2.1}' },
+      { at: 61_000, sog: null, heading: null, awa: null, aws: null, depth: null, extra: null },
+    ];
+    const b = bucketSeries(rows, 60_000);
+    expect(b).toHaveLength(2);
+    expect(b[0]).toMatchObject({ at: 0, sog: 2, stw: 1.5, aws: 6, pressure: 1010, depth: 5 });
+    // 6.2 rad (≈ −0.08) and 0.1 rad average to ≈ 0.01, not to π.
+    expect(b[0]?.awd).toBeCloseTo(0.0084, 3);
+    expect(b[1]).toMatchObject({ at: 60_000, sog: null, awd: null });
+  });
+});
+
+describe('partial updates leave everything else alone', () => {
+  it('prefs, units and source settings keep the fields a PATCH did not mention', async () => {
+    const { c } = await boot();
+    await c.req({
+      method: 'PATCH',
+      url: '/api/prefs',
+      payload: { trackedAis: ['1'], trackHours: 9 },
+    });
+    let res = await c.req({ method: 'PATCH', url: '/api/prefs', payload: { imagerySource: null } });
+    expect(res.json()).toMatchObject({ trackedAis: ['1'], trackHours: 9 });
+
+    await c.req({ method: 'PATCH', url: '/api/settings', payload: { units: { distance: 'ft' } } });
+    res = await c.req({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: { units: { speed: 'mph' } },
+    });
+    expect(res.json<{ units: Record<string, string> }>().units).toMatchObject({
+      distance: 'ft',
+      speed: 'mph',
+    });
+    res = await c.req({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: { source: { transducerDepth: 0.4 } },
+    });
+    expect(res.json<{ source: Record<string, unknown> }>().source).toMatchObject({
+      transducerDepth: 0.4,
+      host: '127.0.0.1', // the env-pinned host is untouched
+    });
   });
 });

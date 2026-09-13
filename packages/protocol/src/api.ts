@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { patchOf } from './patch.js';
 
 /*
  * Request schemas for the REST API. The server validates every body with
@@ -21,6 +22,8 @@ export type DropRequest = z.infer<typeof DropRequest>;
 export const SetDepthRequest = z.object({ depth: z.number().min(0).max(200) });
 export const NudgeRequest = z.object({ anchor: LatLonSchema });
 export const SetTideRequest = z.object({ tideRange: z.number().min(0).max(20) });
+/** Rode paid out, metres; null returns to the measured run. */
+export const SetRodeRequest = z.object({ rodeLength: z.number().positive().max(500).nullable() });
 export const WeighRequest = z.object({
   /** The UI sends true only after its confirmation prompt. The server refuses otherwise. */
   confirm: z.literal(true),
@@ -98,14 +101,12 @@ export type SourceSettings = z.infer<typeof SourceSettingsSchema>;
  * Validation of ranges happens against ALARM_CONFIG_DOCS on the server.
  */
 export const AlarmConfigPatch = z.record(z.string(), z.number());
-export const MarinaConfigPatch = z.record(z.string(), z.unknown());
 
 export const SettingsView = z.object({
   boat: BoatGeometrySchema,
   units: UnitsSchema,
   source: SourceSettingsSchema,
   alarm: z.record(z.string(), z.number()),
-  marina: z.record(z.string(), z.unknown()),
   /** Target scope for the IDLE rode suggestion. */
   suggestedScope: z.number().min(2).max(10),
   /** Boat name shown in the UI and notifications. */
@@ -128,15 +129,14 @@ export const SettingsView = z.object({
 export type SettingsView = z.infer<typeof SettingsView>;
 
 export const SettingsPatch = z.object({
-  boat: BoatGeometrySchema.partial().optional(),
-  units: UnitsSchema.partial().optional(),
-  source: SourceSettingsSchema.partial().optional(),
+  boat: patchOf(BoatGeometrySchema).optional(),
+  units: patchOf(UnitsSchema).optional(),
+  source: patchOf(SourceSettingsSchema).optional(),
   alarm: z.record(z.string(), z.number()).optional(),
-  marina: z.record(z.string(), z.unknown()).optional(),
   suggestedScope: z.number().min(2).max(10).optional(),
   boatName: z.string().max(60).optional(),
   timeZone: z.string().max(60).optional(),
-  nightMode: SettingsView.shape.nightMode.partial().optional(),
+  nightMode: patchOf(SettingsView.shape.nightMode).optional(),
 });
 export type SettingsPatch = z.infer<typeof SettingsPatch>;
 
@@ -174,6 +174,25 @@ export const TrackPoint = z.object({
 });
 export type TrackPoint = z.infer<typeof TrackPoint>;
 
+/** One point of an AIS target's recent track. */
+export interface AisTrackPoint {
+  at: number;
+  lat: number;
+  lon: number;
+}
+
+/** Bucketed samples for the Data screen's rolling charts. Angles are circular means. */
+export interface SeriesBucket {
+  at: number;
+  sog: number | null;
+  stw: number | null;
+  aws: number | null;
+  /** Apparent wind direction, radians true, from heading + AWA per sample. */
+  awd: number | null;
+  pressure: number | null;
+  depth: number | null;
+}
+
 // ---------------------------------------------------------------- view preferences
 
 /**
@@ -186,15 +205,25 @@ export const ViewPrefs = z.object({
   trackHours: z.number().min(0.25).max(72).default(6),
   showAis: z.boolean().default(true),
   watchView: z.enum(['polar', 'chart']).default('polar'),
-  /** Imagery source id drawn under the polar view, or null for none. */
+  /** Imagery source id drawn under the Watch view, or null for none. */
   imagerySource: z.string().max(40).nullable().default(null),
+  /** Imagery under the Traffic view; the two screens are independent. */
+  trafficImagery: z.string().max(40).nullable().default(null),
+  /** Watch view half-width in metres; null follows the circle. */
+  watchRange: z.number().min(10).max(200_000).nullable().default(null),
+  /** Traffic view half-width in metres; null fits every target while trafficFitAll is on. */
+  trafficRange: z.number().min(10).max(200_000).nullable().default(null),
   /** Keep the previous session's anchor visible, greyed, after weighing. */
   showPreviousAnchor: z.boolean().default(true),
   /** Traffic screen: fit every AIS target instead of the swing circle. */
   trafficFitAll: z.boolean().default(true),
+  /** MMSIs whose hour of track is drawn on the Traffic view. */
+  trackedAis: z.array(z.string().max(12)).max(50).default([]),
+  /** Watch controls collapsed to a slim bar (per boat; the ack button never hides). */
+  controlsCollapsed: z.boolean().default(false),
 });
 export type ViewPrefs = z.infer<typeof ViewPrefs>;
-export const ViewPrefsPatch = ViewPrefs.partial();
+export const ViewPrefsPatch = patchOf(ViewPrefs);
 export type ViewPrefsPatch = z.infer<typeof ViewPrefsPatch>;
 
 // ---------------------------------------------------------------- imagery

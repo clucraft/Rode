@@ -4,7 +4,6 @@ import type {
   AnchorSession,
   EngineEvent,
   LiveValues,
-  MarinaState,
   WatchPhase,
   WatchStateName,
 } from '@rode/core';
@@ -26,7 +25,6 @@ export interface WatchView {
   snoozed: boolean;
   refires: number;
   live: LiveValues;
-  marina: MarinaState;
 }
 
 export interface FieldView<T = number> {
@@ -40,11 +38,15 @@ export interface FieldView<T = number> {
 export interface InstrumentsView {
   position?: FieldView<{ lat: number; lon: number }>;
   sog?: FieldView;
+  /** Speed through water from the log (VHW). */
+  stw?: FieldView;
   cog?: FieldView;
   heading?: FieldView;
   depth?: FieldView;
   awa?: FieldView;
   aws?: FieldView;
+  /** Apparent wind direction, radians true; derived from heading + AWA. */
+  awd?: FieldView;
   twa?: FieldView;
   tws?: FieldView;
   twd?: FieldView;

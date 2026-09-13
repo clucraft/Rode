@@ -10,6 +10,7 @@ import {
   encodeMWV,
   encodeRMC,
   encodeRMCNoFix,
+  encodeVHW,
   encodeVTG,
   encodeXDR,
   encodeZDA,
@@ -52,6 +53,8 @@ export function sentencesFor(s: BoatState, second: number): string[] {
   if (s.depth !== null)
     out.push(encodeDPT(Math.max(0, s.depth - TRANSDUCER_DEPTH), TRANSDUCER_DEPTH));
   if (s.awa !== null && s.aws !== null) out.push(encodeMWV(s.awa, s.aws, 'R'));
+  // A log reads a little under SOG at anchor (tide runs past the hull).
+  if (second % 2 === 0) out.push(encodeVHW(Math.max(0, s.sog * 0.9), null));
 
   if (second % 5 === 0) {
     if (s.waterTemp !== null) out.push(encodeMTW(s.waterTemp));

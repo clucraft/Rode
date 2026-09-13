@@ -13,10 +13,9 @@ import {
   type WatchState,
 } from './anchor.js';
 import { DEFAULT_ALARM_CONFIG, type AlarmConfig } from './config.js';
-import { DEFAULT_MARINA_CONFIG, type MarinaConfig } from './marina.js';
 import { destination } from './geodesy.js';
 import type { BoatGeometry, Field, LatLon, Telemetry } from './types.js';
-import { celsiusToKelvin, degToRad, knotsToMps } from './units.js';
+import { degToRad, knotsToMps } from './units.js';
 import type { ExclusionZone } from './zones.js';
 
 // ---------------------------------------------------------------- harness
@@ -38,12 +37,6 @@ interface Scene {
   connected?: boolean;
   /** Age of the position sample relative to now, ms. */
   positionAge?: number;
-  fridgeTemp?: number | null;
-  freezerTemp?: number | null;
-  airTemp?: number | null;
-  batterySoc?: number | null;
-  solarPower?: number | null;
-  localHour?: number | null;
 }
 
 function field<T>(value: T, now: number, age = 0): Field<T> {
@@ -55,7 +48,6 @@ class Harness {
   now: number;
   events: EngineEvent[] = [];
   config: AlarmConfig;
-  marinaConfig: MarinaConfig;
   zones: ExclusionZone[] = [];
   boat: BoatGeometry;
   private ids = 0;
@@ -64,14 +56,12 @@ class Harness {
   constructor(
     opts: {
       config?: Partial<AlarmConfig>;
-      marinaConfig?: Partial<MarinaConfig>;
       boat?: BoatGeometry;
       start?: number;
     } = {},
   ) {
     this.now = opts.start ?? 1_700_000_000_000;
     this.config = { ...DEFAULT_ALARM_CONFIG, ...opts.config };
-    this.marinaConfig = { ...DEFAULT_MARINA_CONFIG, ...opts.marinaConfig };
     this.boat = opts.boat ?? BOAT;
     this.state = createWatchState(this.now);
   }
@@ -89,19 +79,7 @@ class Harness {
     if (scene.position !== null) {
       t.position = field(scene.position ?? ANCHOR, now, scene.positionAge ?? 0);
     }
-    type NumKey =
-      | 'sog'
-      | 'cog'
-      | 'heading'
-      | 'depth'
-      | 'awa'
-      | 'aws'
-      | 'hdop'
-      | 'fridgeTemp'
-      | 'freezerTemp'
-      | 'airTemp'
-      | 'batterySoc'
-      | 'solarPower';
+    type NumKey = 'sog' | 'cog' | 'heading' | 'depth' | 'awa' | 'aws' | 'hdop';
     const num = (k: NumKey, v: number | null | undefined, dflt?: number) => {
       const val = v === undefined ? dflt : v;
       if (val !== null && val !== undefined) t[k] = field(val, now);
@@ -113,19 +91,12 @@ class Harness {
     num('awa', scene.awa, 0);
     num('aws', scene.aws, knotsToMps(12));
     num('hdop', scene.hdop, 1);
-    num('fridgeTemp', scene.fridgeTemp);
-    num('freezerTemp', scene.freezerTemp);
-    num('airTemp', scene.airTemp);
-    num('batterySoc', scene.batterySoc);
-    num('solarPower', scene.solarPower);
     return {
       now,
       telemetry: t,
       config: this.config,
       boat: this.boat,
       zones: this.zones,
-      marinaConfig: this.marinaConfig,
-      localHour: scene.localHour ?? null,
       newId: () => `s${++this.ids}`,
     };
   }
@@ -230,7 +201,7 @@ describe('lifecycle', () => {
     expect(h.state.session?.geometry?.horizontalRun).toBeCloseTo(30, 1);
   });
 
-  it('is idempotent: repeated drop/set/marina/weigh do nothing', () => {
+  it('is idempotent: repeated drop/set/weigh do nothing', () => {
     const h = new Harness();
     h.cmd({ type: 'drop' });
     expect(h.cmd({ type: 'drop' })).toEqual([]);
@@ -238,8 +209,6 @@ describe('lifecycle', () => {
     expect(h.cmd({ type: 'set' })).toEqual([]);
     h.cmd({ type: 'weigh' });
     expect(h.cmd({ type: 'weigh' })).toEqual([]);
-    h.cmd({ type: 'marina' });
-    expect(h.cmd({ type: 'marina' })).toEqual([]);
   });
 
   it('rejects commands in the wrong state with a reason', () => {
@@ -251,7 +220,6 @@ describe('lifecycle', () => {
     expect(h.cmd({ type: 'ack', by: 'x' })[0]).toMatchObject({ reason: 'nothing-to-ack' });
     expect(h.cmd({ type: 'nudge', anchor: ANCHOR })[0]).toMatchObject({ reason: 'not-set' });
     h.cmd({ type: 'drop' });
-    expect(h.cmd({ type: 'marina' })[0]).toMatchObject({ reason: 'not-idle' });
     expect(h.cmd({ type: 'drop' })).toEqual([]); // DROPPING: idempotent
     h.cmd({ type: 'set' }, { position: at(0, 20) });
     expect(h.cmd({ type: 'drop' })[0]).toMatchObject({ reason: 'not-idle' });
@@ -376,52 +344,6 @@ describe('scenario: slow drag', () => {
     expect(h.state.stateName).toBe('ALARM');
     const states = h.events.filter((e) => e.type === 'state-changed').map((e) => e.to);
     expect(states).toEqual(['DROPPING', 'SET', 'WARNING', 'ALARM']);
-  });
-});
-
-describe('scenario: break-out', () => {
-  it('escalates straight to critical when wind angle and speed fire together', () => {
-    const h = new Harness();
-    h.anchorUp(30);
-    h.run(60, { position: at(0, 30) });
-    // Boat breaks out: SOG 2 kn, wind 120° off the bow, 15 kn, still inside the circle.
-    const ev = h.run(45, (i) => ({
-      position: at(90, 30 + i * 0.2),
-      sog: knotsToMps(2),
-      awa: degToRad(120),
-      aws: knotsToMps(15),
-    }));
-    expect(raised(ev, 'wind-shift')).toHaveLength(1);
-    expect(raised(ev, 'speed')).toHaveLength(1);
-    expect(raised(ev, 'breakout')).toHaveLength(1);
-    expect(raised(ev, 'position-outside')).toHaveLength(0);
-    expect(h.state.stateName).toBe('ALARM');
-    expect(h.state.conditions.breakout?.severity).toBe('critical');
-  });
-});
-
-describe('scenario: light-air vane spin', () => {
-  it('never raises a wind-shift warning below 5 kn apparent', () => {
-    const h = new Harness();
-    h.anchorUp(30);
-    const ev = h.run(600, (i) => ({
-      position: at(0, 28),
-      sog: knotsToMps(0.2),
-      awa: degToRad(((i * 37) % 360) - 180), // wild
-      aws: knotsToMps(2 + Math.sin(i / 5) * 2), // 0–4 kn
-    }));
-    expect(raised(ev, 'wind-shift')).toHaveLength(0);
-    expect(h.conditionKeys()).toEqual([]);
-  });
-
-  it('does raise it once the wind is above the floor', () => {
-    const h = new Harness();
-    h.anchorUp(30);
-    const ev = h.run(45, { position: at(0, 28), awa: degToRad(100), aws: knotsToMps(8) });
-    expect(raised(ev, 'wind-shift')).toHaveLength(1);
-    // and clears when the wind falls back under the floor
-    const ev2 = h.run(15, { position: at(0, 28), awa: degToRad(100), aws: knotsToMps(3) });
-    expect(cleared(ev2, 'wind-shift')).toHaveLength(1);
   });
 });
 
@@ -659,32 +581,6 @@ describe('acknowledgement', () => {
 
 // ---------------------------------------------------------------- marina
 
-describe('marina mode', () => {
-  it('starts with one command at the current position and a tight radius', () => {
-    const h = new Harness();
-    const ev = h.cmd({ type: 'marina' }, { position: ANCHOR });
-    expect(ev.map((e) => e.type)).toEqual(['session-started', 'marina-started', 'state-changed']);
-    expect(h.state.phase).toBe('MARINA');
-    expect(h.state.session?.marinaRadius).toBe(DEFAULT_ALARM_CONFIG.marinaRadius);
-    expect(h.state.session?.geometry).toBeNull();
-  });
-
-  it('ignores wind angle entirely, watches position and SOG', () => {
-    const h = new Harness();
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    const calm = h.run(120, { position: at(45, 3), awa: degToRad(150), aws: knotsToMps(25) });
-    expect(has(calm, 'condition-raised')).toBe(false);
-    const moving = h.run(40, { position: at(45, 3), sog: knotsToMps(2) });
-    expect(raised(moving, 'speed')).toHaveLength(1);
-    expect(raised(moving, 'breakout')).toHaveLength(0);
-    const gone = h.run(10, { position: at(45, 40) });
-    expect(raised(gone, 'position-outside')).toHaveLength(1);
-    expect(h.state.stateName).toBe('ALARM');
-  });
-});
-
-// ---------------------------------------------------------------- invariants
-
 describe('invariants', () => {
   it('derived state matches conditions', () => {
     const h = new Harness();
@@ -725,103 +621,6 @@ describe('invariants', () => {
 
 // ---------------------------------------------------------------- marina monitors
 
-describe('marina: refrigeration', () => {
-  const C = (c: number) => celsiusToKelvin(c);
-
-  it('reports every band transition as the freezer fails, including into "off"', () => {
-    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    h.run(30, { position: ANCHOR, freezerTemp: C(-18), airTemp: C(22) });
-    // Warms 1 °C per 20 s from -18 to +22 (ambient): 800 s.
-    const ev = h.run(800, (i) => ({
-      position: ANCHOR,
-      freezerTemp: C(-18 + i / 20),
-      airTemp: C(22),
-    }));
-    const bands = ev
-      .filter((e) => e.type === 'cold-box-band-changed' && e.box === 'freezer')
-      .map((e) => (e.type === 'cold-box-band-changed' ? e.to : ''));
-    expect(bands).toEqual(['warm', 'failing', 'off']);
-    // The condition raised and cleared along the way and the state is now
-    // quiet: that is the trap, and the transition log is what catches it.
-    expect(raised(ev, 'freezer-warm')).toHaveLength(1);
-    expect(raised(ev, 'freezer-failing')).toHaveLength(1);
-    expect(cleared(ev, 'freezer-failing')).toHaveLength(1);
-    expect(h.conditionKeys()).toEqual([]);
-    expect(h.state.marina.freezer.band).toBe('off');
-  });
-
-  it('a box at ambient is "off", not failing; leaving "off" for normal is reported', () => {
-    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    const off = h.run(30, { position: ANCHOR, fridgeTemp: C(21), airTemp: C(22) });
-    expect(off.filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(1);
-    expect(h.state.marina.fridge.band).toBe('off');
-    expect(h.conditionKeys()).toEqual([]);
-    const on = h.run(30, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
-    expect(on.find((e) => e.type === 'cold-box-band-changed')).toMatchObject({
-      box: 'fridge',
-      from: 'off',
-      to: 'normal',
-    });
-  });
-
-  it('does not report a transition for a brief spike (loading provisions)', () => {
-    const h = new Harness({ marinaConfig: { bandHoldMs: 60_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    h.run(70, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
-    const spike = h.run(40, { position: ANCHOR, fridgeTemp: C(10), airTemp: C(22) });
-    const back = h.run(70, { position: ANCHOR, fridgeTemp: C(4), airTemp: C(22) });
-    expect([...spike, ...back].filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(0);
-  });
-
-  it('uses the absolute fallback when there is no ambient reading', () => {
-    const h = new Harness({ marinaConfig: { bandHoldMs: 10_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    h.run(30, { position: ANCHOR, freezerTemp: C(16) });
-    expect(h.state.marina.freezer.band).toBe('off');
-  });
-});
-
-describe('marina: battery and solar', () => {
-  it('rides through an overnight SoC dip but alarms on a sustained one', () => {
-    const h = new Harness({ marinaConfig: { socHoldMs: 20 * 60_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    const dip = h.run(600, { position: ANCHOR, batterySoc: 0.45 });
-    const rec = h.run(60, { position: ANCHOR, batterySoc: 0.6 });
-    expect(has([...dip, ...rec], 'condition-raised')).toBe(false);
-    const low = h.run(25 * 60, { position: ANCHOR, batterySoc: 0.45 });
-    expect(raised(low, 'battery-low')).toHaveLength(1);
-    expect(h.state.conditions['battery-low']?.severity).toBe('warning');
-    const crit = h.run(25 * 60, { position: ANCHOR, batterySoc: 0.25 });
-    expect(crit.filter((e) => e.type === 'condition-escalated')).toHaveLength(1);
-  });
-
-  it('warns on no solar yield through the midday window, not at night', () => {
-    const h = new Harness({ marinaConfig: { solarHoldMs: 60 * 60_000 } });
-    h.cmd({ type: 'marina' }, { position: ANCHOR });
-    const night = h.run(2 * 3600, { position: ANCHOR, solarPower: 0, localHour: 2 });
-    expect(has(night, 'condition-raised')).toBe(false);
-    const day = h.run(2 * 3600, { position: ANCHOR, solarPower: 5, localHour: 12 });
-    expect(raised(day, 'solar-no-yield')).toHaveLength(1);
-    const producing = h.run(15, { position: ANCHOR, solarPower: 180, localHour: 12 });
-    expect(cleared(producing, 'solar-no-yield')).toHaveLength(1);
-  });
-
-  it('does not run the monitors at anchor', () => {
-    const h = new Harness({ marinaConfig: { bandHoldMs: 1_000 } });
-    h.anchorUp(30);
-    const ev = h.run(30, {
-      position: at(0, 30),
-      freezerTemp: celsiusToKelvin(0),
-      airTemp: celsiusToKelvin(22),
-    });
-    expect(ev.filter((e) => e.type === 'cold-box-band-changed')).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------- manual circle
-
 describe('manual radius', () => {
   it('linked mode moves both circles from one value, keeping the warn distance', () => {
     const h = new Harness();
@@ -832,7 +631,7 @@ describe('manual radius', () => {
     expect(ev[0].computed?.swingRadius).toBeCloseTo(48, 1);
     const o = h.state.session?.radiusOverride;
     expect(o).toMatchObject({ swingRadius: 60, warnRadius: 50, mode: 'linked', by: 'skipper' });
-    expect(effectiveRadii(h.state.session, h.config)).toEqual({
+    expect(effectiveRadii(h.state.session)).toEqual({
       swingRadius: 60,
       warnRadius: 50,
       manual: true,
@@ -888,20 +687,8 @@ describe('manual radius', () => {
       type: 'radius-override-cleared',
     });
     expect(h.state.session?.radiusOverride).toBeNull();
-    expect(effectiveRadii(h.state.session, h.config)?.manual).toBe(false);
+    expect(effectiveRadii(h.state.session)?.manual).toBe(false);
     expect(h.cmd({ type: 'clear-radius', by: 'a' })).toEqual([]);
-  });
-
-  it('is only allowed while watching, and works in marina mode too', () => {
-    const h = new Harness();
-    expect(
-      h.cmd({ type: 'set-radius', swingRadius: 50, mode: 'linked', by: 'a' })[0],
-    ).toMatchObject({ reason: 'not-watching' });
-    h.cmd({ type: 'marina' });
-    h.cmd({ type: 'set-radius', swingRadius: 50, mode: 'linked', by: 'a' });
-    expect(effectiveRadii(h.state.session, h.config)).toMatchObject({ swingRadius: 50 });
-    h.run(20, { position: at(0, 30) });
-    expect(h.conditionKeys()).toEqual([]);
   });
 
   it('survives a power cut, and old persisted sessions get a null override', () => {
@@ -945,19 +732,118 @@ describe('settings change under an active session', () => {
     h.config = { ...h.config, warnDistance: 5, swingMargin: 40 };
     h.cmd({ type: 'recompute' });
     expect(h.state.session?.radiusOverride).toMatchObject({ swingRadius: 60, warnRadius: 50 });
-    expect(effectiveRadii(h.state.session, h.config)).toMatchObject({ swingRadius: 60 });
-  });
-
-  it('marina sessions pick up a new marina radius', () => {
-    const h = new Harness();
-    h.cmd({ type: 'marina' });
-    h.config = { ...h.config, marinaRadius: 35 };
-    expect(h.cmd({ type: 'recompute' })[0]).toMatchObject({ marinaRadius: 35, swingRadius: 35 });
-    expect(h.state.session?.marinaRadius).toBe(35);
+    expect(effectiveRadii(h.state.session)).toMatchObject({ swingRadius: 60 });
   });
 
   it('is a no-op when idle', () => {
     const h = new Harness();
     expect(h.cmd({ type: 'recompute' })).toEqual([]);
+  });
+});
+
+describe('rode entered by the skipper', () => {
+  it('derives the circle from the rode rather than the measured run', () => {
+    const h = new Harness();
+    h.anchorUp(30); // measured run 30 m, vertical 6 m → rode 30.6, swing 48
+    const ev = h.cmd({ type: 'set-rode', rodeLength: 50 });
+    expect(ev[0]).toMatchObject({ type: 'rode-entered', rodeLength: 50 });
+    const g = h.state.session?.geometry;
+    expect(g?.rodeLength).toBe(50);
+    expect(g?.rodeEntered).toBe(true);
+    // run = sqrt(50² − 6²) = 49.64; swing = run + 15 + 3
+    expect(g?.horizontalRun).toBeCloseTo(Math.sqrt(50 * 50 - 36), 2);
+    expect(g?.swingRadius).toBeCloseTo(Math.sqrt(50 * 50 - 36) + 18, 1);
+    expect(g?.scopeRatio).toBeCloseTo(50 / 6, 2);
+    expect(h.state.session?.rodeOverride).toBe(50);
+    // Tide and settings changes keep using the entered rode.
+    h.cmd({ type: 'set-tide', tideRange: 1 });
+    expect(h.state.session?.geometry?.rodeLength).toBe(50);
+    // Back to measured.
+    h.cmd({ type: 'set-rode', rodeLength: null });
+    expect(h.state.session?.geometry?.rodeEntered).toBe(false);
+    expect(h.state.session?.geometry?.horizontalRun).toBeCloseTo(30, 1);
+  });
+
+  it('rejects rode that cannot reach the bottom, and nonsense', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    expect(h.cmd({ type: 'set-rode', rodeLength: 4 })[0]).toMatchObject({
+      reason: 'rode-too-short',
+    });
+    expect(h.cmd({ type: 'set-rode', rodeLength: 9999 })[0]).toMatchObject({
+      reason: 'invalid-rode',
+    });
+    expect(h.cmd({ type: 'set-rode', rodeLength: -1 })[0]).toMatchObject({
+      reason: 'invalid-rode',
+    });
+    h.cmd({ type: 'weigh' });
+    expect(h.cmd({ type: 'set-rode', rodeLength: 40 })[0]).toMatchObject({ reason: 'no-session' });
+  });
+
+  it('can be entered while still DROPPING and applies at set', () => {
+    const h = new Harness();
+    h.cmd({ type: 'drop' }, { position: ANCHOR });
+    h.cmd({ type: 'set-rode', rodeLength: 40 });
+    h.cmd({ type: 'set' }, { position: at(0, 10) });
+    expect(h.state.session?.geometry?.rodeLength).toBe(40);
+    expect(h.state.session?.geometry?.horizontalRun).toBeCloseTo(Math.sqrt(1600 - 36), 2);
+  });
+});
+
+describe('rehydrating state from before this version', () => {
+  it('ends a marina session and drops conditions from removed detectors', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    const json = JSON.parse(JSON.stringify(h.state)) as Record<string, unknown>;
+    json.phase = 'MARINA';
+    json.stateName = 'WARNING';
+    (json.session as Record<string, unknown>).mode = 'marina';
+    json.marina = { fridge: { band: 'warm' } };
+    (json.detectors as Record<string, unknown>).windShift = { active: true };
+    json.conditions = {
+      'wind-shift': {
+        key: 'wind-shift',
+        id: 'wind-shift',
+        severity: 'warning',
+        since: 1,
+        values: {},
+      },
+      'fridge-warm': {
+        key: 'fridge-warm',
+        id: 'fridge-warm',
+        severity: 'warning',
+        since: 1,
+        values: {},
+      },
+    };
+    const back = rehydrateWatchState(json as unknown as WatchState, h.now + 1000);
+    expect(back.phase).toBe('IDLE');
+    expect(back.stateName).toBe('IDLE');
+    expect(back.session?.endedAt).toBe(h.now + 1000);
+    expect(back.conditions).toEqual({});
+    expect('windShift' in back.detectors).toBe(false);
+    expect('marina' in back).toBe(false);
+    expect(JSON.stringify(back)).not.toContain('MARINA');
+  });
+
+  it('keeps an anchor session but strips stale wind-shift conditions', () => {
+    const h = new Harness();
+    h.anchorUp(30);
+    const json = JSON.parse(JSON.stringify(h.state)) as Record<string, unknown>;
+    delete (json.session as Record<string, unknown>).rodeOverride;
+    json.conditions = {
+      'wind-shift': {
+        key: 'wind-shift',
+        id: 'wind-shift',
+        severity: 'warning',
+        since: 1,
+        values: {},
+      },
+      'gps-stale': { key: 'gps-stale', id: 'gps-stale', severity: 'warning', since: 1, values: {} },
+    };
+    const back = rehydrateWatchState(json as unknown as WatchState, h.now + 1000);
+    expect(back.phase).toBe('SET');
+    expect(Object.keys(back.conditions)).toEqual(['gps-stale']);
+    expect(back.session?.rodeOverride).toBeNull();
   });
 });
