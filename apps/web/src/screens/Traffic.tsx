@@ -1,5 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { effectiveRadii } from '@rode/core';
+import type { AisTrackPoint } from '@rode/protocol';
+import { api } from '../api/client.js';
 import { usePrefs, useStore } from '../api/store.js';
 import { useAuth } from '../api/auth.js';
 import {
@@ -11,17 +13,20 @@ import {
   fmtSpeed,
 } from '../lib/format.js';
 import { useTheme } from '../lib/theme.js';
-import { PolarView } from '../components/PolarView.jsx';
+import { autoRange, PolarView } from '../components/PolarView.jsx';
 import { ImageryPicker, useImagerySources } from '../components/ImageryPicker.jsx';
 
 /*
  * AIS traffic for the anchored case: who is near, who is closing, and when.
  * Sorted by range; anything with a CPA inside the caution ring is flagged.
- * The view opens out far enough to show every target.
+ * Targets the server has not heard for 30 minutes drop off the list and the
+ * view, taking their track with them. "Track" per vessel draws its last
+ * hour; the choice is a shared preference so every device shows the same.
  */
 
 const CAUTION_CPA_M = 200;
 const CAUTION_TCPA_S = 15 * 60;
+const TRACK_MS = 60 * 60_000;
 
 export function Traffic() {
   const { state, clockOffsetMs } = useStore();
@@ -38,10 +43,8 @@ export function Traffic() {
     instruments.heading && !instruments.heading.stale ? instruments.heading.value : null;
   const watch = state?.watch;
   const active = watch && watch.phase !== 'IDLE' ? watch.session : null;
-  const radii = effectiveRadii(active, {
-    marinaRadius: settings?.alarm.marinaRadius ?? 30,
-    warnDistance: settings?.alarm.warnDistance ?? 10,
-  });
+  const radii = effectiveRadii(active);
+  const origin = active?.anchor ?? boat;
   const closing = targets.filter(
     (t) =>
       t.cpa !== null &&
@@ -51,9 +54,81 @@ export function Traffic() {
       t.tcpa < CAUTION_TCPA_S,
   );
   const imagery = useMemo(() => {
-    const src = imagerySources.find((s) => s.id === prefs.imagerySource && s.enabled);
+    const src = imagerySources.find((s) => s.id === prefs.trafficImagery && s.enabled);
     return src ? { id: src.id, minZoom: src.minZoom, maxZoom: src.maxZoom } : null;
-  }, [imagerySources, prefs.imagerySource]);
+  }, [imagerySources, prefs.trafficImagery]);
+
+  // ---- tracks: fetch the hour once per tracked vessel, then follow live positions.
+  const tracked = useMemo(() => new Set(prefs.trackedAis), [prefs.trackedAis]);
+  const [tracks, setTracks] = useState<Record<string, AisTrackPoint[]>>({});
+  const fetched = useRef(new Set<string>());
+  useEffect(() => {
+    for (const mmsi of tracked) {
+      if (fetched.current.has(mmsi)) continue;
+      fetched.current.add(mmsi);
+      api
+        .get<AisTrackPoint[]>(`/api/ais/${mmsi}/track`)
+        .then((pts) => setTracks((t) => ({ ...t, [mmsi]: pts })))
+        .catch(() => undefined);
+    }
+    // Untracked or vanished vessels lose their history here too.
+    setTracks((t) => {
+      const next: Record<string, AisTrackPoint[]> = {};
+      let changed = false;
+      for (const [mmsi, pts] of Object.entries(t)) {
+        if (tracked.has(mmsi) && targets.some((x) => x.mmsi === mmsi)) next[mmsi] = pts;
+        else changed = true;
+      }
+      for (const mmsi of Object.keys(t)) if (!(mmsi in next)) fetched.current.delete(mmsi);
+      return changed ? next : t;
+    });
+  }, [tracked, targets]);
+  useEffect(() => {
+    // Append the live position of each tracked target as it moves; trim to an hour.
+    setTracks((t) => {
+      let changed = false;
+      const next = { ...t };
+      for (const target of targets) {
+        if (!tracked.has(target.mmsi) || target.lat === null || target.lon === null) continue;
+        const pts = next[target.mmsi] ?? [];
+        const last = pts[pts.length - 1];
+        if (
+          last &&
+          Math.abs(last.lat - target.lat) < 1e-7 &&
+          Math.abs(last.lon - target.lon) < 1e-7
+        )
+          continue;
+        const at = target.lastPositionAt ?? now;
+        if (last && at - last.at < 10_000) continue;
+        next[target.mmsi] = [...pts, { at, lat: target.lat, lon: target.lon }].filter(
+          (q) => now - q.at <= TRACK_MS,
+        );
+        changed = true;
+      }
+      return changed ? next : t;
+    });
+  }, [targets, tracked, now]);
+  const toggleTrack = (mmsi: string) => {
+    const next = tracked.has(mmsi)
+      ? prefs.trackedAis.filter((m) => m !== mmsi)
+      : [...prefs.trackedAis, mmsi];
+    setPrefs({ trackedAis: next });
+  };
+
+  // Fit-all follows the targets while it is on; turning it off freezes the
+  // current extent so the picture does not jump. A manual zoom also turns it
+  // off, so the extent only ever changes when the user asks.
+  const currentAuto = autoRange({
+    swingRadius: radii?.swingRadius ?? null,
+    origin,
+    track: [],
+    fitAis: true,
+    ais: targets,
+  });
+  const setFitAll = (on: boolean) => {
+    if (on) setPrefs({ trafficFitAll: true, trafficRange: null });
+    else setPrefs({ trafficFitAll: false, trafficRange: prefs.trafficRange ?? currentAuto });
+  };
 
   return (
     <div className="stack">
@@ -67,21 +142,26 @@ export function Traffic() {
 
       <PolarView
         state={watch?.stateName ?? 'IDLE'}
-        anchor={active?.anchor ?? active?.marinaCentre ?? null}
+        anchor={active?.anchor ?? null}
         swingRadius={radii?.swingRadius ?? null}
         warnRadius={radii?.warnRadius ?? null}
         manualRadius={radii?.manual ?? false}
+        radiusLabels={false}
         boat={boat}
         headingRad={heading}
         positionStale={false}
         track={[]}
         zones={[]}
         ais={targets}
+        aisTracks={tracks}
         units={units}
         showAis
         fitAis={prefs.trafficFitAll}
+        range={prefs.trafficFitAll ? null : prefs.trafficRange}
+        onRangeChange={(m) => setPrefs({ trafficRange: m, trafficFitAll: false })}
         imagery={imagery}
         night={theme.theme === 'night'}
+        now={now}
         wind={
           instruments.awa
             ? {
@@ -103,19 +183,19 @@ export function Traffic() {
           <input
             type="checkbox"
             checked={prefs.trafficFitAll}
-            onChange={(e) => setPrefs({ trafficFitAll: e.target.checked })}
+            onChange={(e) => setFitAll(e.target.checked)}
           />{' '}
           Fit all targets
         </label>
         <ImageryPicker
           sources={imagerySources}
-          value={prefs.imagerySource}
-          onChange={(id) => setPrefs({ imagerySource: id })}
+          value={prefs.trafficImagery}
+          onChange={(id) => setPrefs({ trafficImagery: id })}
         />
         <span className="muted small">
           {targets.length === 0
             ? ''
-            : `${String(targets.length)} target${targets.length === 1 ? '' : 's'}`}
+            : `${String(targets.length)} target${targets.length === 1 ? '' : 's'} · gone after 30 min of silence`}
         </span>
       </div>
 
@@ -138,6 +218,7 @@ export function Traffic() {
               <th className="num">CPA</th>
               <th className="num">TCPA</th>
               <th>Seen</th>
+              <th>Track</th>
             </tr>
           </thead>
           <tbody>
@@ -148,6 +229,7 @@ export function Traffic() {
                 t.tcpa > 0 &&
                 t.cpa < CAUTION_CPA_M &&
                 t.tcpa < CAUTION_TCPA_S;
+              const on = tracked.has(t.mmsi);
               return (
                 <tr
                   key={t.mmsi}
@@ -172,7 +254,18 @@ export function Traffic() {
                   <td className="num">
                     {t.tcpa === null ? '—' : t.tcpa <= 0 ? 'diverging' : fmtDuration(t.tcpa * 1000)}
                   </td>
-                  <td>{fmtDuration(now - t.lastSeen)}</td>
+                  <td>{fmtDuration(Math.max(0, now - t.lastSeen))}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className={on ? 'btn small primary' : 'btn small'}
+                      style={{ minHeight: 34 }}
+                      aria-pressed={on}
+                      onClick={() => toggleTrack(t.mmsi)}
+                    >
+                      {on ? 'Tracking' : 'Track'}
+                    </button>
+                  </td>
                 </tr>
               );
             })}

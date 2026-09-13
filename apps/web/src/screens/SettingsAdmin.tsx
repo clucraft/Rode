@@ -19,6 +19,7 @@ import { Panel } from './Settings.jsx';
 export function Zones() {
   const [zones, setZones] = useState<ZoneRecord[]>([]);
   const [editing, setEditing] = useState<ZoneRecord | 'new' | null>(null);
+  const [deleting, setDeleting] = useState<ZoneRecord | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const load = () =>
     api
@@ -47,15 +48,35 @@ export function Zones() {
                 points
               </div>
             </div>
-            <button type="button" className="btn" onClick={() => setEditing(z)}>
-              Edit
-            </button>
+            <div className="btn-row" style={{ flexWrap: 'nowrap' }}>
+              <button type="button" className="btn" onClick={() => setEditing(z)}>
+                Edit
+              </button>
+              <button type="button" className="btn danger" onClick={() => setDeleting(z)}>
+                Delete
+              </button>
+            </div>
           </li>
         ))}
       </ul>
       <button type="button" className="btn primary" onClick={() => setEditing('new')}>
         New zone
       </button>
+      <p className="small muted">Zones are removed automatically when the anchor is weighed.</p>
+      {deleting ? (
+        <ConfirmDialog
+          title={`Delete ${deleting.name}?`}
+          danger
+          body={<p>The zone stops being checked immediately.</p>}
+          confirmLabel="Delete zone"
+          onConfirm={async () => {
+            await api.delete(`/api/zones/${deleting.id}`);
+            setDeleting(null);
+            await load();
+          }}
+          onClose={() => setDeleting(null)}
+        />
+      ) : null}
       {editing ? (
         <ZoneEditor
           zone={editing === 'new' ? null : editing}
@@ -160,7 +181,7 @@ export function ZoneEditor(p: {
       </label>
       <p className="small muted">
         Draw on the view around the boat (tap to add points, in order around the shape), or type
-        decimal degrees. "here" fills a row from the boat's position.
+        decimal degrees.
       </p>
       <div className="row">
         <button
@@ -217,7 +238,7 @@ export function ZoneEditor(p: {
         />
       ) : null}
       {points.map((q, i) => (
-        <div className="row" key={i}>
+        <div className="point-row" key={i}>
           <input
             type="text"
             inputMode="decimal"
@@ -227,7 +248,7 @@ export function ZoneEditor(p: {
             onChange={(e) =>
               setPoints((ps) => ps.map((r, j) => (j === i ? { ...r, lat: e.target.value } : r)))
             }
-            style={{ flex: 1, minHeight: 40 }}
+            style={{ minHeight: 40 }}
           />
           <input
             type="text"
@@ -238,31 +259,17 @@ export function ZoneEditor(p: {
             onChange={(e) =>
               setPoints((ps) => ps.map((r, j) => (j === i ? { ...r, lon: e.target.value } : r)))
             }
-            style={{ flex: 1, minHeight: 40 }}
+            style={{ minHeight: 40 }}
           />
           <button
             type="button"
             className="btn quiet"
-            disabled={!here}
-            onClick={() =>
-              here &&
-              setPoints((ps) =>
-                ps.map((r, j) =>
-                  j === i ? { lat: here.lat.toFixed(6), lon: here.lon.toFixed(6) } : r,
-                ),
-              )
-            }
-          >
-            here
-          </button>
-          <button
-            type="button"
-            className="btn quiet"
-            aria-label="Remove point"
+            aria-label={`Delete point ${String(i + 1)}`}
+            title={points.length <= 3 ? 'A zone needs at least three points' : undefined}
             disabled={points.length <= 3}
             onClick={() => setPoints((ps) => ps.filter((_, j) => j !== i))}
           >
-            ×
+            Delete
           </button>
         </div>
       ))}

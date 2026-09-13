@@ -121,7 +121,8 @@ describe('PolarView additions', () => {
     );
     // Wind from 120° true: the arrow group is rotated by that much.
     expect(html).toMatch(/class="wind" transform="rotate\(120\.0 300 300\)"/);
-    expect(html).toContain('wind <!-- -->30° S');
+    // The box shows the absolute direction (heading + AWA), not the angle off the bow.
+    expect(html).toContain('wind <!-- -->120°');
     expect(html).toContain('11.7'); // 6 m/s in knots
     expect(html).toContain('depth');
     expect(html).toContain('5.2');
@@ -149,7 +150,7 @@ describe('PolarView additions', () => {
     expect(html).toContain('alarm <!-- -->48.0 m<!-- --> · manual');
   });
 
-  it('lays imagery tiles under the rose from the tile API', () => {
+  it('lays imagery tiles across the whole square from the tile API', () => {
     const html = renderToString(
       <PolarView
         {...base}
@@ -158,7 +159,8 @@ describe('PolarView additions', () => {
         pixelWidth={600}
       />,
     );
-    expect(html).toContain('clip-path="url(#polar-rose-clip)"');
+    expect(html).toContain('class="imagery-bg"');
+    expect(html).not.toContain('clip-path');
     expect(html).toMatch(/href="\/api\/tiles\/sat\/1[6-9]\/\d+\/\d+"/);
     expect(html).toMatch(/imagery z<!-- -->1[6-9]/);
   });
@@ -208,5 +210,92 @@ describe('PolarView additions', () => {
     );
     expect(editing).toContain('touch-action:none');
     expect(editing).toContain('drag a ring to resize');
+  });
+});
+
+describe('PolarView v0.3', () => {
+  const base = {
+    state: 'SET' as const,
+    anchor: A,
+    swingRadius: 48,
+    warnRadius: 38,
+    boat: destination(A, degToRad(45), 30),
+    headingRad: null,
+    positionStale: false,
+    track: [],
+    zones: [],
+    ais: [],
+    units: DEFAULT_UNITS,
+  };
+  const target = (mmsi: string, bearingDeg: number, m: number) => {
+    const pos = destination(A, degToRad(bearingDeg), m);
+    return {
+      mmsi,
+      own: false,
+      class: 'A' as const,
+      name: null,
+      callsign: null,
+      shipType: null,
+      navStatus: null,
+      lat: pos.lat,
+      lon: pos.lon,
+      sog: 2,
+      cog: 0,
+      heading: null,
+      length: null,
+      beam: null,
+      lastSeen: 1000,
+      lastPositionAt: 1000,
+      range: m,
+      bearing: degToRad(bearingDeg),
+      cpa: m,
+      tcpa: null,
+    };
+  };
+
+  it('can hide the radius labels and draws AIS tracks in their own class', () => {
+    const html = renderToString(
+      <PolarView
+        {...base}
+        radiusLabels={false}
+        showAis
+        ais={[target('7', 90, 40)]}
+        aisTracks={{
+          '7': [
+            destination(A, 0, 10),
+            destination(A, degToRad(45), 20),
+            destination(A, degToRad(90), 40),
+          ],
+        }}
+      />,
+    );
+    expect(html).not.toContain('radius-label');
+    expect(html).toContain('class="ais-track"');
+    expect(html).toContain('class="ais-target"');
+  });
+
+  it('labels rings in nautical miles once they are a long way apart', () => {
+    const html = renderToString(
+      <PolarView {...base} range={20_000} onRangeChange={() => undefined} />,
+    );
+    expect(html).toContain('rings <!-- -->5 nm');
+    const ft = renderToString(
+      <PolarView
+        {...base}
+        units={{ ...DEFAULT_UNITS, distance: 'ft' }}
+        range={1500}
+        onRangeChange={() => undefined}
+      />,
+    );
+    expect(ft).toContain('rings <!-- -->0.5 nm');
+  });
+
+  it('honours a supplied range and clamps it to 100 nm', () => {
+    const a = renderToString(
+      <PolarView {...base} range={1_000_000} onRangeChange={() => undefined} />,
+    );
+    expect(a).toContain('rings <!-- -->50 nm');
+    const b = renderToString(<PolarView {...base} range={12} onRangeChange={() => undefined} />);
+    expect(b).toContain('rings <!-- -->5 m');
   });
 });

@@ -59,12 +59,8 @@ export function Dialog(p: {
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="dialog-title">{p.title}</h2>
-        <div>{p.children}</div>
-        {p.actions ? (
-          <div className="btn-row" style={{ marginTop: '1rem' }}>
-            {p.actions}
-          </div>
-        ) : null}
+        <div className="dialog-body">{p.children}</div>
+        {p.actions ? <div className="btn-row dialog-actions">{p.actions}</div> : null}
       </div>
     </div>
   );

@@ -11,7 +11,7 @@ import { setThemeMode, useTheme } from '../lib/theme.js';
 
 const tabs = [
   { to: '/', label: 'Watch', icon: AnchorIcon },
-  { to: '/now', label: 'Now', icon: GaugeIcon },
+  { to: '/data', label: 'Data', icon: GaugeIcon },
   { to: '/traffic', label: 'Traffic', icon: ShipIcon },
   { to: '/history', label: 'History', icon: ClockIcon },
   { to: '/settings', label: 'Settings', icon: CogIcon },

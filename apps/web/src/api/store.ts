@@ -54,8 +54,13 @@ export const DEFAULT_PREFS: ViewPrefs = {
   showAis: true,
   watchView: 'polar',
   imagerySource: null,
+  trafficImagery: null,
+  watchRange: null,
+  trafficRange: null,
   showPreviousAnchor: true,
   trafficFitAll: true,
+  trackedAis: [],
+  controlsCollapsed: false,
 };
 const MAX_EVENTS = 200;
 const PING_MS = 15_000;

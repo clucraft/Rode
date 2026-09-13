@@ -6,7 +6,7 @@ import { setNightSchedule, useTheme } from './lib/theme.js';
 import { Shell } from './components/Shell.jsx';
 import { Login, Setup } from './screens/Auth.jsx';
 import { Watch } from './screens/Watch.jsx';
-import { Now } from './screens/Now.jsx';
+import { Data } from './screens/Data.jsx';
 import { Traffic } from './screens/Traffic.jsx';
 import { History, SessionDetail } from './screens/History.jsx';
 import {
@@ -55,7 +55,8 @@ export function App() {
       <Routes>
         <Route element={<Shell />}>
           <Route index element={<Watch />} />
-          <Route path="now" element={<Now />} />
+          <Route path="data" element={<Data />} />
+          <Route path="now" element={<Navigate to="/data" replace />} />
           <Route path="traffic" element={<Traffic />} />
           <Route path="history" element={<History />} />
           <Route path="history/:id" element={<SessionDetail />} />

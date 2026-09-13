@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, Outlet } from 'react-router';
-import type { ConfigDoc, MarinaDoc } from '@rode/core';
+import type { ConfigDoc } from '@rode/core';
 import type { SettingsPatch, SettingsView } from '@rode/protocol';
 import { api, errorMessage } from '../api/client.js';
 import { logout, refreshSettings, useAuth } from '../api/auth.js';
@@ -127,8 +127,6 @@ export function Panel(p: { title: string; back?: string; children: ReactNode }) 
 interface Docs {
   alarm: Record<string, ConfigDoc>;
   alarmDefaults: Record<string, number>;
-  marina: MarinaDoc[];
-  marinaDefaults: Record<string, unknown>;
 }
 
 const GROUPS: { title: string; keys: string[] }[] = [
@@ -139,9 +137,6 @@ const GROUPS: { title: string; keys: string[] }[] = [
       'warnDistance',
       'positionHoldMs',
       'outsideHoldMs',
-      'awaWindow',
-      'awaHoldMs',
-      'awaMinWindSpeed',
       'sogThreshold',
       'sogHoldMs',
       'clearHoldMs',
@@ -150,7 +145,6 @@ const GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Data liveness', keys: ['gpsStaleWarnMs', 'gpsStaleCriticalMs', 'sourceGraceMs'] },
   { title: 'Depth', keys: ['minDepth', 'depthHoldMs'] },
   { title: 'Exclusion zones', keys: ['zoneLookaheadMs', 'zoneHoldMs'] },
-  { title: 'Marina', keys: ['marinaRadius', 'marinaSogThreshold'] },
   { title: 'Acknowledgement', keys: ['snoozeMs'] },
 ];
 
@@ -158,7 +152,6 @@ export function Thresholds() {
   const { settings, user } = useAuth();
   const [docs, setDocs] = useState<Docs | null>(null);
   const [draft, setDraft] = useState<Record<string, number>>({});
-  const [marina, setMarina] = useState<Record<string, unknown>>({});
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
@@ -174,7 +167,6 @@ export function Thresholds() {
   useEffect(() => {
     if (settings) {
       setDraft({ ...settings.alarm });
-      setMarina(structuredClone(settings.marina));
     }
   }, [settings]);
 
@@ -216,7 +208,7 @@ export function Thresholds() {
     setErr(null);
     setSaved(false);
     try {
-      await api.patch('/api/settings', { alarm: draft, marina } satisfies SettingsPatch);
+      await api.patch('/api/settings', { alarm: draft } satisfies SettingsPatch);
       await refreshSettings();
       setSaved(true);
     } catch (e) {
@@ -264,47 +256,6 @@ export function Thresholds() {
           })}
         </section>
       ))}
-      <section className="section">
-        <h2>Marina monitors</h2>
-        <p className="muted small">
-          Only active in marina mode: a docked boat does not weathervane, so the wind detector is
-          off and these watch the things that fail while nobody is aboard.
-        </p>
-        {docs.marina.map((doc) => {
-          const cur = getPath(marina, doc.path) ?? getPath(docs.marinaDefaults, doc.path);
-          const def = getPath(docs.marinaDefaults, doc.path);
-          const d = marinaDisplay(doc.unit, typeof cur === 'number' ? cur : 0, units.temperature);
-          const dd = marinaDisplay(doc.unit, typeof def === 'number' ? def : 0, units.temperature);
-          return (
-            <div className="field" key={doc.path}>
-              <label htmlFor={`mt-${doc.path}`}>{doc.label}</label>
-              <div className="unit">
-                <input
-                  id={`mt-${doc.path}`}
-                  type="number"
-                  inputMode="decimal"
-                  step={d.step}
-                  value={d.value}
-                  disabled={!admin}
-                  onChange={(e) =>
-                    setMarina((m) =>
-                      setPath(
-                        m,
-                        doc.path,
-                        marinaSi(doc.unit, Number(e.target.value), units.temperature),
-                      ),
-                    )
-                  }
-                />
-                <span>{d.unit}</span>
-              </div>
-              <span className="why">
-                Default {dd.value} {dd.unit}. {doc.why}
-              </span>
-            </div>
-          );
-        })}
-      </section>
       {err ? <p className="error">{err}</p> : null}
       {saved ? (
         <p className="muted">Saved. The engine uses the new values from the next tick.</p>
@@ -324,7 +275,7 @@ export function Thresholds() {
       {confirmRestore ? (
         <ConfirmDialog
           title="Restore recommended defaults?"
-          body={<p>Every alarm and marina threshold goes back to the field-tested values.</p>}
+          body={<p>Every alarm threshold goes back to the field-tested values.</p>}
           confirmLabel="Restore"
           onConfirm={async () => {
             await api.post('/api/settings/alarm/restore-defaults');
@@ -342,74 +293,17 @@ function round(v: number, dp: number): number {
   return Math.round(v * f) / f;
 }
 
-function getPath(obj: Record<string, unknown>, path: string): unknown {
-  return path
-    .split('.')
-    .reduce<unknown>(
-      (o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined),
-      obj,
-    );
-}
-
-function setPath(
-  obj: Record<string, unknown>,
-  path: string,
-  value: unknown,
-): Record<string, unknown> {
-  const out = structuredClone(obj);
-  const keys = path.split('.');
-  let cur: Record<string, unknown> = out;
-  for (const k of keys.slice(0, -1)) {
-    const next = cur[k];
-    if (!next || typeof next !== 'object') cur[k] = {};
-    cur = cur[k] as Record<string, unknown>;
+/** Every IANA zone the browser knows; falls back to a short list on old engines. */
+const TIME_ZONES: string[] = (() => {
+  try {
+    const intl = Intl as unknown as { supportedValuesOf?: (k: string) => string[] };
+    const list = intl.supportedValuesOf?.('timeZone');
+    if (list && list.length > 0) return list.includes('UTC') ? list : ['UTC', ...list];
+  } catch {
+    // fall through
   }
-  cur[keys[keys.length - 1] ?? ''] = value;
-  return out;
-}
-
-function marinaDisplay(
-  unit: MarinaDoc['unit'],
-  si: number,
-  temp: 'C' | 'F',
-): { value: number; unit: string; step: number } {
-  switch (unit) {
-    case 'K': {
-      const c = si - 273.15;
-      return temp === 'F'
-        ? { value: round((c * 9) / 5 + 32, 1), unit: '°F', step: 1 }
-        : { value: round(c, 1), unit: '°C', step: 0.5 };
-    }
-    case 'Kdelta':
-      return temp === 'F'
-        ? { value: round((si * 9) / 5, 1), unit: '°F', step: 0.5 }
-        : { value: round(si, 1), unit: '°C', step: 0.5 };
-    case 'ms':
-      return { value: round(si / 60_000, 1), unit: 'min', step: 1 };
-    case 'fraction':
-      return { value: round(si * 100, 0), unit: '%', step: 1 };
-    case 'hour':
-      return { value: si, unit: 'h', step: 1 };
-    case 'W':
-      return { value: si, unit: 'W', step: 5 };
-  }
-}
-
-function marinaSi(unit: MarinaDoc['unit'], display: number, temp: 'C' | 'F'): number {
-  switch (unit) {
-    case 'K':
-      return (temp === 'F' ? ((display - 32) * 5) / 9 : display) + 273.15;
-    case 'Kdelta':
-      return temp === 'F' ? (display * 5) / 9 : display;
-    case 'ms':
-      return display * 60_000;
-    case 'fraction':
-      return display / 100;
-    case 'hour':
-    case 'W':
-      return display;
-  }
-}
+  return ['UTC', 'Atlantic/Bermuda', 'America/New_York', 'Europe/London', 'Pacific/Auckland'];
+})();
 
 // ---------------------------------------------------------------- boat geometry
 
@@ -584,16 +478,27 @@ export function Display() {
         {sel('speed', ['kn', 'm/s', 'km/h', 'mph'])}
         {sel('temperature', ['C', 'F'])}
         <div className="field">
-          <label htmlFor="u-tz">Time zone (IANA)</label>
+          <label htmlFor="u-tz">Time zone</label>
           <input
             id="u-tz"
             type="text"
+            list="u-tz-list"
             value={tz}
             disabled={!admin}
+            autoComplete="off"
+            spellCheck={false}
             onChange={(e) => setTz(e.target.value)}
-            placeholder="e.g. Atlantic/Bermuda"
+            placeholder="Type to search, e.g. Bermuda"
           />
-          <span className="why">Used for the daily heartbeat time and the solar window.</span>
+          <datalist id="u-tz-list">
+            {TIME_ZONES.map((z) => (
+              <option key={z} value={z} />
+            ))}
+          </datalist>
+          <span className="why">
+            {TIME_ZONES.includes(tz) || tz === '' ? '' : 'Not a known zone name. '}Used for the
+            daily heartbeat time and local times in History.
+          </span>
         </div>
       </section>
 

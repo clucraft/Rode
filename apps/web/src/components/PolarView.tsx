@@ -18,20 +18,20 @@ import {
   type WatchStateName,
 } from '@rode/core';
 import type { AisTargetView, Units, ZoneRecord } from '@rode/protocol';
-import { fmtDepth, fmtSpeed } from '../lib/format.js';
+import { fmtBearing, fmtDepth, fmtDuration, fmtRange, fmtSpeed } from '../lib/format.js';
 
 /*
  * Schematic polar view: anchor at centre, swing circle, warning ring, boat
  * rotated to heading, track, north indicator, distance rings, exclusion
- * zones, AIS targets, apparent wind on the outer ring. North-up. With an
- * imagery source selected, satellite tiles are drawn under all of it,
- * clipped to the rose; without one it stands alone, because on a bad cell
- * link it *is* the display.
+ * zones, AIS targets (with their last hour of track when asked), apparent
+ * wind on the outer ring. North-up. With an imagery source selected,
+ * satellite tiles fill the square under all of it; without one it stands
+ * alone, because on a bad cell link it *is* the display.
  *
  * Everything is projected onto a local tangent plane at the anchor (or the
  * boat, when there is no session). Metres → SVG units via one scale factor.
- * Web-mercator tiles are placed by projecting their corners the same way;
- * over a few hundred metres the difference is well under a pixel.
+ * The view's extent is a half-width in metres: either supplied by the
+ * caller (a shared preference) or derived from what is on screen.
  */
 
 export interface TrackPoint {
@@ -46,7 +46,7 @@ export interface PreviousAnchor {
 }
 
 export interface WindInfo {
-  /** Apparent wind angle, radians, positive to starboard. */
+  /** Apparent wind angle relative to the bow, radians, positive to starboard. */
   awa: number | null;
   /** Apparent wind speed, m/s. */
   aws: number | null;
@@ -55,7 +55,7 @@ export interface WindInfo {
 
 export interface PolarViewProps {
   state: WatchStateName;
-  /** Centre of the circle: anchor, or marina centre. Null when idle. */
+  /** Centre of the circle: the anchor. Null when idle. */
   anchor: LatLon | null;
   swingRadius: number | null;
   warnRadius: number | null;
@@ -82,6 +82,8 @@ export interface PolarViewProps {
   depth?: { value: number | null; stale: boolean } | undefined;
   /** The circle actually being watched is manual; labels say so. */
   manualRadius?: boolean | undefined;
+  /** Write the two radii on their rings (the Watch screen does, Traffic does not). */
+  radiusLabels?: boolean | undefined;
   /** Circle editing: drag either ring. Values in metres. */
   editRadius?:
     | {
@@ -91,29 +93,83 @@ export interface PolarViewProps {
     | undefined;
   /** Where the last session's anchor was; drawn greyed. */
   previousAnchor?: PreviousAnchor | null | undefined;
-  /** Widen the default extent to include every AIS target. */
+  /** Widen the automatic extent to include every AIS target. */
   fitAis?: boolean | undefined;
   /** Imagery source id for /api/tiles, with its zoom range. */
   imagery?: { id: string; minZoom: number; maxZoom: number } | null | undefined;
   night?: boolean | undefined;
   /** Rendered width in CSS px, used to pick a tile zoom. Defaults to 600. */
   pixelWidth?: number | undefined;
+  /**
+   * Half-width of the view in metres. `null` (or omitted) means automatic.
+   * With `onRangeChange` the zoom buttons report instead of changing local
+   * state, so the caller can persist the choice.
+   */
+  range?: number | null | undefined;
+  onRangeChange?: ((metres: number) => void) | undefined;
+  /** Recent positions of AIS targets to draw, keyed by MMSI. */
+  aisTracks?: Record<string, TrackPoint[]> | undefined;
+  /** Server time, for "seen … ago" in the target box. */
+  now?: number | undefined;
 }
 
 const SIZE = 600; // SVG viewBox
 const HALF = SIZE / 2;
-/** Imagery stays inside the compass ticks. */
+/** Compass ticks live just inside the edge. */
 const ROSE_R = HALF - 18;
-const MIN_ZOOM = 0.05;
-const MAX_ZOOM = 8;
+/** Extent limits: a boat length in, 100 nautical miles out. */
+export const MIN_RANGE_M = 10;
+export const MAX_RANGE_M = 100 * 1852;
 const MAX_TILES = 90;
+const NM = 1852;
 
+/**
+ * The extent the view picks for itself: the circle with room around it, or
+ * the track, or every AIS target when asked. Exported so a screen can
+ * freeze it into a preference when the user turns "fit all" off.
+ */
+export function autoRange(p: {
+  swingRadius: number | null;
+  origin: LatLon | null;
+  track: TrackPoint[];
+  fitAis: boolean;
+  ais: AisTargetView[];
+}): number {
+  let half = 40;
+  if (p.swingRadius !== null && p.swingRadius > 0) half = p.swingRadius * 1.35;
+  else if (p.origin) {
+    for (const t of p.track) {
+      const xy = toLocalXY(p.origin, t);
+      half = Math.max(half, Math.hypot(xy.x, xy.y) * 1.2);
+    }
+  }
+  if (p.fitAis && p.origin) {
+    for (const t of p.ais) {
+      if (t.lat === null || t.lon === null) continue;
+      const xy = toLocalXY(p.origin, { lat: t.lat, lon: t.lon });
+      // Ignore anything absurdly far (a rebroadcast from another coast).
+      const d = Math.hypot(xy.x, xy.y);
+      if (d < MAX_RANGE_M) half = Math.max(half, d * 1.15);
+    }
+  }
+  return Math.min(MAX_RANGE_M, Math.max(MIN_RANGE_M, half));
+}
+
+/**
+ * Ring spacing that yields 3–6 rings: metres or feet close in, nautical
+ * miles once a ring would be more than 1000 ft / 1000 m apart.
+ */
 function niceRing(metresPerHalf: number, feet: boolean): number {
-  // Pick a ring spacing that yields 3–6 rings in the view.
-  const candidates = feet
-    ? [25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000]
-    : [5, 10, 20, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
   const target = metresPerHalf / 3.5;
+  const nmFrom = feet ? 1000 * 0.3048 : 1000;
+  if (target > nmFrom) {
+    const nm = [0.5, 1, 2, 5, 10, 20, 50];
+    const chosen = nm.find((c) => c * NM >= target) ?? 50;
+    return chosen * NM;
+  }
+  const candidates = feet
+    ? [25, 50, 100, 200, 250, 500, 1000]
+    : [5, 10, 20, 25, 50, 100, 200, 500, 1000];
   const toDisplay = feet ? metresToFeet(target) : target;
   const chosen = candidates.find((c) => c >= toDisplay) ?? candidates[candidates.length - 1] ?? 50;
   return feet ? chosen * 0.3048 : chosen;
@@ -122,37 +178,36 @@ function niceRing(metresPerHalf: number, feet: boolean): number {
 type Drag = { kind: 'anchor'; x: number; y: number } | { kind: 'swing' | 'warn'; metres: number };
 
 export function PolarView(p: PolarViewProps) {
-  const [zoom, setZoom] = useState(1);
+  const [localRange, setLocalRange] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [hoverAis, setHoverAis] = useState<string | null>(null);
+  const [pinnedAis, setPinnedAis] = useState<string | null>(null);
 
   const origin = p.anchor ?? p.boat;
   const feet = p.units.distance === 'ft';
   const interactive = Boolean(p.nudgeMode) || p.onTap !== undefined || p.editRadius !== undefined;
+  const controlled = p.onRangeChange !== undefined;
 
-  // Metres shown from centre to edge of the view.
-  const baseHalf = useMemo(() => {
-    let half = 40;
-    if (p.swingRadius !== null && p.swingRadius > 0) half = p.swingRadius * 1.35;
-    else if (origin) {
-      for (const t of p.track) {
-        const xy = toLocalXY(origin, t);
-        half = Math.max(half, Math.hypot(xy.x, xy.y) * 1.2);
-      }
-    }
-    if (p.fitAis && origin) {
-      for (const t of p.ais) {
-        if (t.lat === null || t.lon === null) continue;
-        const xy = toLocalXY(origin, { lat: t.lat, lon: t.lon });
-        // Ignore anything absurdly far (a rebroadcast from another coast).
-        const d = Math.hypot(xy.x, xy.y);
-        if (d < 50_000) half = Math.max(half, d * 1.15);
-      }
-    }
-    return half;
-  }, [p.swingRadius, p.track, origin, p.fitAis, p.ais]);
-  const half = baseHalf / zoom;
+  const auto = useMemo(
+    () =>
+      autoRange({
+        swingRadius: p.swingRadius,
+        origin,
+        track: p.track,
+        fitAis: p.fitAis ?? false,
+        ais: p.ais,
+      }),
+    [p.swingRadius, origin, p.track, p.fitAis, p.ais],
+  );
+  const chosen = controlled ? (p.range ?? null) : localRange;
+  const half = Math.min(MAX_RANGE_M, Math.max(MIN_RANGE_M, chosen ?? auto));
   const scale = HALF / half; // svg units per metre
+  const setRange = (m: number) => {
+    const clamped = Math.min(MAX_RANGE_M, Math.max(MIN_RANGE_M, m));
+    if (controlled) p.onRangeChange?.(clamped);
+    else setLocalRange(clamped);
+  };
 
   const toSvg = useCallback(
     (pos: LatLon): { x: number; y: number } | null => {
@@ -174,15 +229,27 @@ export function PolarView(p: PolarViewProps) {
 
   const boatSvg = p.boat ? toSvg(p.boat) : null;
   const setSvg = p.setPosition ? toSvg(p.setPosition) : null;
-  const trackPath = useMemo(() => {
-    if (!origin || p.track.length < 2) return '';
-    return p.track
-      .map((t, i) => {
-        const s = toSvg(t);
-        return s ? `${i === 0 ? 'M' : 'L'}${s.x.toFixed(1)} ${s.y.toFixed(1)}` : '';
-      })
-      .join(' ');
-  }, [origin, p.track, toSvg]);
+  const pathFor = useCallback(
+    (track: TrackPoint[]): string => {
+      if (!origin || track.length < 2) return '';
+      return track
+        .map((t, i) => {
+          const s = toSvg(t);
+          return s ? `${i === 0 ? 'M' : 'L'}${s.x.toFixed(1)} ${s.y.toFixed(1)}` : '';
+        })
+        .join(' ');
+    },
+    [origin, toSvg],
+  );
+  const trackPath = useMemo(() => pathFor(p.track), [pathFor, p.track]);
+  const aisPaths = useMemo(() => {
+    const out: { mmsi: string; d: string }[] = [];
+    for (const [mmsi, track] of Object.entries(p.aisTracks ?? {})) {
+      const d = pathFor(track);
+      if (d) out.push({ mmsi, d });
+    }
+    return out;
+  }, [pathFor, p.aisTracks]);
 
   const anchorSvg = p.anchor ? toSvg(p.anchor) : null;
   const anchorDraw = drag?.kind === 'anchor' ? { x: drag.x, y: drag.y } : anchorSvg;
@@ -296,8 +363,13 @@ export function PolarView(p: PolarViewProps) {
     setDrag(null);
   };
 
-  const fmtRing = (m: number) =>
-    feet ? `${Math.round(metresToFeet(m))} ft` : `${Math.round(m)} m`;
+  const fmtRing = (m: number): string => {
+    if (m >= (feet ? 1000 * 0.3048 : 1000)) {
+      const nm = m / NM;
+      return `${nm < 1 ? nm.toFixed(1) : nm.toFixed(0)} nm`;
+    }
+    return feet ? `${Math.round(metresToFeet(m))} ft` : `${Math.round(m)} m`;
+  };
   const fmtRingDp = (m: number) =>
     feet ? `${metresToFeet(m).toFixed(m < 30 ? 1 : 0)} ft` : `${m.toFixed(m < 100 ? 1 : 0)} m`;
 
@@ -305,6 +377,9 @@ export function PolarView(p: PolarViewProps) {
   // they never sit on top of each other however close the rings are.
   const diag = Math.SQRT1_2;
   const prev = p.previousAnchor ? toSvg(p.previousAnchor.anchor) : null;
+  const selectedAis = pinnedAis ?? hoverAis;
+  const selectedTarget = selectedAis ? p.ais.find((t) => t.mmsi === selectedAis) : undefined;
+  const labels = p.radiusLabels ?? true;
 
   return (
     <div className="polar-wrap" data-interactive={interactive ? 'true' : 'false'}>
@@ -326,16 +401,10 @@ export function PolarView(p: PolarViewProps) {
         onPointerUp={onPointerUp}
         onPointerCancel={() => setDrag(null)}
       >
-        <defs>
-          <clipPath id="polar-rose-clip">
-            <circle cx={HALF} cy={HALF} r={ROSE_R} />
-          </clipPath>
-        </defs>
-
-        {/* imagery under everything, clipped to the rose */}
+        {/* imagery under everything, across the whole square */}
         {tiles ? (
-          <g className="imagery" clipPath="url(#polar-rose-clip)">
-            <circle className="imagery-bg" cx={HALF} cy={HALF} r={ROSE_R} />
+          <g className="imagery">
+            <rect className="imagery-bg" x={0} y={0} width={SIZE} height={SIZE} />
             {tiles.list.map((t) => (
               <image
                 key={t.key}
@@ -499,14 +568,16 @@ export function PolarView(p: PolarViewProps) {
                   cy={anchorDraw.y}
                   r={warnM * scale}
                 />
-                <text
-                  className="radius-label warn"
-                  x={anchorDraw.x - warnM * scale * diag - 4}
-                  y={anchorDraw.y + warnM * scale * diag + 14}
-                  textAnchor="end"
-                >
-                  warning {fmtRingDp(warnM)}
-                </text>
+                {labels ? (
+                  <text
+                    className="radius-label warn"
+                    x={anchorDraw.x - warnM * scale * diag - 4}
+                    y={anchorDraw.y + warnM * scale * diag + 14}
+                    textAnchor="end"
+                  >
+                    warning {fmtRingDp(warnM)}
+                  </text>
+                ) : null}
               </>
             ) : null}
             <circle
@@ -515,14 +586,16 @@ export function PolarView(p: PolarViewProps) {
               cy={anchorDraw.y}
               r={swingM * scale}
             />
-            <text
-              className="radius-label alarm"
-              x={anchorDraw.x + swingM * scale * diag + 4}
-              y={anchorDraw.y + swingM * scale * diag + 14}
-            >
-              alarm {fmtRingDp(swingM)}
-              {p.manualRadius ? ' · manual' : ''}
-            </text>
+            {labels ? (
+              <text
+                className="radius-label alarm"
+                x={anchorDraw.x + swingM * scale * diag + 4}
+                y={anchorDraw.y + swingM * scale * diag + 14}
+              >
+                alarm {fmtRingDp(swingM)}
+                {p.manualRadius ? ' · manual' : ''}
+              </text>
+            ) : null}
             {p.editRadius ? (
               <g className="edit-handles">
                 <circle cx={anchorDraw.x + swingM * scale} cy={anchorDraw.y} r={9} />
@@ -548,15 +621,35 @@ export function PolarView(p: PolarViewProps) {
         {/* track */}
         {trackPath ? <path className="track" d={trackPath} /> : null}
 
-        {/* AIS targets */}
+        {/* AIS tracks, then targets */}
+        {p.showAis
+          ? aisPaths.map((t) => <path key={t.mmsi} className="ais-track" d={t.d} />)
+          : null}
         {p.showAis
           ? p.ais.map((t) => {
               if (t.lat === null || t.lon === null) return null;
               const s = toSvg({ lat: t.lat, lon: t.lon });
               if (!s || s.x < -20 || s.y < -20 || s.x > SIZE + 20 || s.y > SIZE + 20) return null;
               const rot = t.cog !== null ? radToDeg(t.cog) : 0;
+              const selected = selectedAis === t.mmsi;
               return (
-                <g key={t.mmsi} transform={`translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})`}>
+                <g
+                  key={t.mmsi}
+                  className={selected ? 'ais-target selected' : 'ais-target'}
+                  transform={`translate(${s.x.toFixed(1)} ${s.y.toFixed(1)})`}
+                  onPointerEnter={(e) => {
+                    if (e.pointerType === 'mouse') setHoverAis(t.mmsi);
+                  }}
+                  onPointerLeave={(e) => {
+                    if (e.pointerType === 'mouse') setHoverAis(null);
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPinnedAis((cur) => (cur === t.mmsi ? null : t.mmsi));
+                  }}
+                >
+                  {/* A generous invisible hit area for fingers. */}
+                  <circle className="ais-hit" r={18} />
                   <path
                     className="ais"
                     d="M0 -9 L6 7 L0 4 L-6 7 Z"
@@ -624,19 +717,21 @@ export function PolarView(p: PolarViewProps) {
       {p.wind || p.depth ? (
         <div className="polar-readouts num" aria-label="Wind and depth">
           {p.wind ? (
-            <div className={`pr ${p.wind.stale ? 'stale' : ''}`}>
-              <span className="pr-label">wind {p.wind.awa !== null ? fmtAwa(p.wind.awa) : ''}</span>
+            <div className={p.wind.stale ? 'pr stale' : 'pr'}>
+              <span className="pr-label">
+                wind {windDir !== null ? `${fmtBearing(windDir).value}°` : ''}
+              </span>
               <span className="pr-value">
                 {fmtSpeed(p.wind.aws, p.units).value}
                 <span className="pr-unit">{fmtSpeed(p.wind.aws, p.units).unit}</span>
               </span>
-              {windDir === null && p.wind.awa !== null ? (
+              {windDir === null && awa !== null ? (
                 <span className="pr-note">no heading</span>
               ) : null}
             </div>
           ) : null}
           {p.depth ? (
-            <div className={`pr ${p.depth.stale ? 'stale' : ''}`}>
+            <div className={p.depth.stale ? 'pr stale' : 'pr'}>
               <span className="pr-label">depth</span>
               <span className="pr-value">
                 {fmtDepth(p.depth.value, p.units).value}
@@ -647,19 +742,24 @@ export function PolarView(p: PolarViewProps) {
         </div>
       ) : null}
 
+      {selectedTarget ? (
+        <AisBox
+          t={selectedTarget}
+          units={p.units}
+          now={p.now}
+          pinned={pinnedAis === selectedTarget.mmsi}
+          onClose={() => {
+            setPinnedAis(null);
+            setHoverAis(null);
+          }}
+        />
+      ) : null}
+
       <div className="polar-controls">
-        <button
-          type="button"
-          aria-label="Zoom in"
-          onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.5))}
-        >
+        <button type="button" aria-label="Zoom in" onClick={() => setRange(half / 1.5)}>
           +
         </button>
-        <button
-          type="button"
-          aria-label="Zoom out"
-          onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5))}
-        >
+        <button type="button" aria-label="Zoom out" onClick={() => setRange(half * 1.5)}>
           −
         </button>
       </div>
@@ -667,9 +767,62 @@ export function PolarView(p: PolarViewProps) {
   );
 }
 
-function fmtAwa(rad: number): string {
-  const deg = Math.round(Math.abs(radToDeg(rad)));
-  return `${String(deg)}° ${rad < 0 ? 'P' : 'S'}`;
+/** The concise card for a hovered or tapped AIS target. */
+function AisBox(p: {
+  t: AisTargetView;
+  units: Units;
+  now: number | undefined;
+  pinned: boolean;
+  onClose: () => void;
+}) {
+  const { t } = p;
+  const range = fmtRange(t.range, p.units);
+  const cpa = fmtRange(t.cpa, p.units);
+  const sog = fmtSpeed(t.sog, p.units);
+  const seen = p.now !== undefined ? fmtDuration(Math.max(0, p.now - t.lastSeen)) : null;
+  return (
+    <div className="ais-box num" role="status">
+      <div className="ais-box-head">
+        <strong>{t.name ?? t.mmsi}</strong>
+        {p.pinned ? (
+          <button type="button" className="ais-box-close" aria-label="Close" onClick={p.onClose}>
+            ×
+          </button>
+        ) : null}
+      </div>
+      <div className="ais-box-sub">
+        {t.mmsi} · class {t.class}
+        {t.callsign ? ` · ${t.callsign}` : ''}
+        {t.navStatus === 1 ? ' · anchored' : t.navStatus === 5 ? ' · moored' : ''}
+      </div>
+      <dl>
+        <dt>Range</dt>
+        <dd>
+          {range.value} {range.unit}
+          {t.bearing !== null ? ` at ${fmtBearing(t.bearing).value}°` : ''}
+        </dd>
+        <dt>SOG / COG</dt>
+        <dd>
+          {sog.value} {sog.unit} / {fmtBearing(t.cog).value}°
+        </dd>
+        <dt>CPA</dt>
+        <dd>
+          {cpa.value} {cpa.unit}
+          {t.tcpa === null
+            ? ''
+            : t.tcpa <= 0
+              ? ' · diverging'
+              : ` in ${fmtDuration(t.tcpa * 1000)}`}
+        </dd>
+        {seen !== null ? (
+          <>
+            <dt>Seen</dt>
+            <dd>{seen} ago</dd>
+          </>
+        ) : null}
+      </dl>
+    </div>
+  );
 }
 
 function distance(a: LatLon, b: LatLon): number {

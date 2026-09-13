@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { effectiveRadii, type ActiveCondition, type LatLon, type WatchStateName } from '@rode/core';
 import type { TrackPoint, Units, ZoneRecord } from '@rode/protocol';
 import { Link } from 'react-router';
@@ -12,14 +12,9 @@ import {
   fmtDepth,
   fmtDistance,
   fmtDuration,
-  fmtPercent,
-  fmtRelativeAngle,
   fmtRode,
   fmtScope,
   fmtSpeed,
-  fmtTemp,
-  fmtVoltage,
-  fmtWatts,
   fromSiDistance,
   toSiDistance,
 } from '../lib/format.js';
@@ -41,7 +36,6 @@ const STATE_LABEL: Record<WatchStateName, string> = {
   IDLE: 'Not watching',
   DROPPING: 'Anchor down',
   SET: 'Watching',
-  MARINA: 'Marina watch',
   WARNING: 'Warning',
   ALARM: 'Alarm',
 };
@@ -49,20 +43,12 @@ const STATE_LABEL: Record<WatchStateName, string> = {
 const CONDITION_LABEL: Record<string, string> = {
   'position-warning': 'Near the edge of the swing circle',
   'position-outside': 'Outside the swing circle',
-  'wind-shift': 'Wind off the bow',
   speed: 'Moving',
-  breakout: 'Break-out: moving with wind off the bow',
   'gps-stale': 'No GPS position',
   'source-disconnected': 'Data source disconnected',
   'depth-shallow': 'Shallow water',
   'zone-breach': 'In an exclusion zone',
   'zone-projected': 'Heading for an exclusion zone',
-  'fridge-warm': 'Fridge warm',
-  'fridge-failing': 'Fridge failing',
-  'freezer-warm': 'Freezer warm',
-  'freezer-failing': 'Freezer failing',
-  'battery-low': 'Battery low',
-  'solar-no-yield': 'No solar yield',
 };
 
 export function Watch() {
@@ -81,6 +67,7 @@ export function Watch() {
   const [confirmWeigh, setConfirmWeigh] = useState(false);
   const [depthPrompt, setDepthPrompt] = useState(false);
   const [tidePrompt, setTidePrompt] = useState(false);
+  const [rodePrompt, setRodePrompt] = useState(false);
   const [nudge, setNudge] = useState(false);
   const [editRadius, setEditRadius] = useState(false);
   const [zoneEditor, setZoneEditor] = useState(false);
@@ -96,10 +83,7 @@ export function Watch() {
   const geometry = session?.geometry ?? null;
   const instruments = state?.instruments ?? {};
   const serverNow = Date.now() + clockOffsetMs;
-  const alarmCfg = {
-    marinaRadius: settings?.alarm.marinaRadius ?? 30,
-    warnDistance: settings?.alarm.warnDistance ?? 10,
-  };
+  const warnDistance = settings?.alarm.warnDistance ?? 10;
 
   // Alarm audio follows the server's state; snoozing silences it.
   useEffect(() => {
@@ -188,8 +172,8 @@ export function Watch() {
   // An ended session stays on the state until the next drop: that is the
   // "previous anchor" shown greyed after weighing.
   const active = phase !== 'IDLE' ? session : null;
-  const centre = active?.mode === 'marina' ? active.marinaCentre : (active?.anchor ?? null);
-  const radii = effectiveRadii(active, alarmCfg);
+  const centre = active?.anchor ?? null;
+  const radii = effectiveRadii(active);
   const radius = radii?.swingRadius ?? null;
   const warnRadius = radii?.warnRadius ?? null;
   const previousAnchor =
@@ -220,6 +204,22 @@ export function Watch() {
     ? { value: instruments.depth.value, stale: instruments.depth.stale }
     : undefined;
 
+  // A new circle (set, nudge, edit, tide, rode, settings) refits the view;
+  // otherwise the extent stays exactly where the user left it.
+  const lastRadius = useRef<number | null>(null);
+  useEffect(() => {
+    const prev = lastRadius.current;
+    lastRadius.current = radius;
+    if (
+      prev !== null &&
+      radius !== null &&
+      Math.abs(prev - radius) > 0.05 &&
+      prefs.watchRange !== null
+    ) {
+      setPrefs({ watchRange: null });
+    }
+  }, [radius]);
+
   // Live preview while a ring is dragged; the server is the truth on release.
   const [radiusDraft, setRadiusDraft] = useState<{ swing: number; warn: number } | null>(null);
   const independent = session?.radiusOverride?.mode === 'independent';
@@ -232,10 +232,10 @@ export function Watch() {
           ? { swing: metres, warn: Math.min(metres, warnRadius ?? 0) }
           : { swing: Math.max(metres, radius ?? 0), warn: metres };
       }
-      const swing = which === 'swing' ? metres : metres + alarmCfg.warnDistance;
-      return { swing, warn: Math.max(0, swing - alarmCfg.warnDistance) };
+      const swing = which === 'swing' ? metres : metres + warnDistance;
+      return { swing, warn: Math.max(0, swing - warnDistance) };
     },
-    [independentMode, warnRadius, radius, alarmCfg.warnDistance],
+    [independentMode, warnRadius, radius, warnDistance],
   );
   const commitRadius = useCallback(
     async (which: 'swing' | 'warn', metres: number) => {
@@ -259,8 +259,6 @@ export function Watch() {
           : 'Back down on the anchor, then press Anchor set.';
       case 'SET':
         return `Radius ${fmtDistance(radius, units).value} ${fmtDistance(radius, units).unit} · scope ${fmtScope(geometry?.scopeRatio).value}:1`;
-      case 'MARINA':
-        return `Radius ${fmtDistance(radius, units).value} ${fmtDistance(radius, units).unit} · wind detector off`;
       case 'WARNING':
       case 'ALARM': {
         const top = conditions[0];
@@ -277,7 +275,7 @@ export function Watch() {
     const c = conditions[0];
     if ((stateName === 'WARNING' || stateName === 'ALARM') && c)
       return `for ${fmtDuration(serverNow - c.since)}`;
-    if (session && (stateName === 'SET' || stateName === 'MARINA'))
+    if (session && stateName === 'SET')
       return `for ${fmtDuration(serverNow - (session.setAt ?? session.startedAt))}`;
     return '';
   };
@@ -352,8 +350,11 @@ export function Watch() {
           previousAnchor={previousAnchor}
           imagery={imagery}
           night={theme.theme === 'night'}
+          range={prefs.watchRange}
+          onRangeChange={(m) => setPrefs({ watchRange: m })}
+          now={serverNow}
           editRadius={
-            editRadius && (phase === 'SET' || phase === 'MARINA')
+            editRadius && phase === 'SET'
               ? {
                   onDrag: (which, m) => setRadiusDraft(linkedPair(which, m)),
                   onCommit: (which, m) => void commitRadius(which, m),
@@ -403,15 +404,15 @@ export function Watch() {
         ) : null}
       </div>
 
-      {editRadius && (phase === 'SET' || phase === 'MARINA') ? (
+      {editRadius && phase === 'SET' ? (
         <RadiusEditor
           units={units}
           swing={radiusDraft?.swing ?? radius}
           warn={radiusDraft?.warn ?? warnRadius}
           manual={radii?.manual ?? false}
-          computed={active ? effectiveRadii({ ...active, radiusOverride: null }, alarmCfg) : null}
+          computed={active ? effectiveRadii({ ...active, radiusOverride: null }) : null}
           independent={independentMode}
-          warnDistance={alarmCfg.warnDistance}
+          warnDistance={warnDistance}
           onIndependent={(v) => setIndependentDraft(v)}
           onApply={async (swing, warn) => {
             setRadiusDraft(null);
@@ -466,7 +467,7 @@ export function Watch() {
           <>
             <Readout
               hero
-              label={session?.mode === 'marina' ? 'From marina position' : 'From anchor'}
+              label="From anchor"
               value={fmtDistance(watch?.live.distanceFromAnchor, units)}
               stale={positionStale}
               sub={`bearing ${fmtBearing(watch?.live.bearingFromAnchor).value}°`}
@@ -489,56 +490,22 @@ export function Watch() {
                   ? session?.radiusOverride?.mode === 'independent'
                     ? 'independent'
                     : 'linked'
-                  : `${fmtDistance(alarmCfg.warnDistance, units).value} ${fmtDistance(alarmCfg.warnDistance, units).unit} inside`
+                  : `${fmtDistance(warnDistance, units).value} ${fmtDistance(warnDistance, units).unit} inside`
               }
             />
-            {session?.mode === 'marina' ? (
-              <>
-                <Readout
-                  label="House bank"
-                  value={fmtPercent(instruments.batterySoc?.value)}
-                  stale={instruments.batterySoc?.stale ?? true}
-                  sub={
-                    instruments.batteryVoltage
-                      ? `${fmtVoltage(instruments.batteryVoltage.value).value} V`
-                      : undefined
-                  }
-                />
-                <Readout
-                  label="Solar"
-                  value={fmtWatts(instruments.solarPower?.value)}
-                  stale={instruments.solarPower?.stale ?? true}
-                />
-                <Readout
-                  label="Fridge"
-                  value={fmtTemp(instruments.fridgeTemp?.value, units)}
-                  stale={instruments.fridgeTemp?.stale ?? true}
-                  sub={
-                    watch?.marina.fridge.band === 'unknown' ? undefined : watch?.marina.fridge.band
-                  }
-                />
-                <Readout
-                  label="Freezer"
-                  value={fmtTemp(instruments.freezerTemp?.value, units)}
-                  stale={instruments.freezerTemp?.stale ?? true}
-                  sub={
-                    watch?.marina.freezer.band === 'unknown'
-                      ? undefined
-                      : watch?.marina.freezer.band
-                  }
-                />
-              </>
-            ) : null}
             {geometry ? (
               <>
                 <Readout
                   label="Rode out"
                   value={fmtRode(geometry.rodeLength, units)}
-                  sub={
+                  sub={[
+                    geometry.rodeEntered ? 'entered by hand' : 'measured at set',
                     geometry.tideRange > 0
                       ? `${fmtScope(geometry.scopeRatioAtHighWater).value}:1 at high water`
-                      : undefined
-                  }
+                      : null,
+                  ]
+                    .filter((x) => x !== null)
+                    .join(' · ')}
                 />
                 <Readout label="Scope" value={fmtScope(geometry.scopeRatio)} />
                 <Readout
@@ -559,16 +526,6 @@ export function Watch() {
           }}
           stale={positionStale}
         />
-        <Readout
-          label="Wind"
-          value={fmtRelativeAngle(instruments.awa?.value)}
-          sub={
-            instruments.aws
-              ? `${fmtSpeed(instruments.aws.value, units).value} ${fmtSpeed(instruments.aws.value, units).unit} apparent`
-              : undefined
-          }
-          stale={instruments.awa?.stale ?? true}
-        />
       </section>
 
       {error ? (
@@ -577,8 +534,38 @@ export function Watch() {
         </p>
       ) : null}
 
-      <section className="controls" aria-label="Anchor controls">
-        <div className="audio-arm">
+      <section
+        className={prefs.controlsCollapsed ? 'controls collapsed' : 'controls'}
+        aria-label="Anchor controls"
+      >
+        <div className="controls-bar">
+          <span>
+            {prefs.controlsCollapsed
+              ? `Controls hidden · sound ${audio.armed ? 'on' : 'OFF'}`
+              : 'Controls'}
+          </span>
+          <button
+            type="button"
+            className="btn quiet small toggle"
+            aria-expanded={!prefs.controlsCollapsed}
+            onClick={() => setPrefs({ controlsCollapsed: !prefs.controlsCollapsed })}
+          >
+            {prefs.controlsCollapsed ? 'Show controls ▲' : 'Hide ▼'}
+          </button>
+        </div>
+        {prefs.controlsCollapsed && conditions.length > 0 && phase === 'SET' ? (
+          <button
+            type="button"
+            className="btn big danger ack"
+            disabled={!canAct || offline || watch?.snoozed}
+            onClick={() => void command('/api/anchor/ack')}
+          >
+            {watch?.snoozed
+              ? `Snoozed ${fmtDuration((watch.ack?.until ?? 0) - serverNow)}`
+              : 'Acknowledge — silence for a while'}
+          </button>
+        ) : null}
+        <div className="audio-arm" hidden={prefs.controlsCollapsed}>
           <span aria-live="polite">
             Alarm sound on this device:{' '}
             <span className={`state ${audio.armed ? 'on' : 'off'}`}>
@@ -597,7 +584,7 @@ export function Watch() {
           {wakeLocked ? <span className="muted small">· screen stays on</span> : null}
         </div>
 
-        {phase === 'IDLE' ? (
+        {phase === 'IDLE' && !prefs.controlsCollapsed ? (
           <div className="btn-row">
             <button
               type="button"
@@ -607,18 +594,10 @@ export function Watch() {
             >
               Drop anchor
             </button>
-            <button
-              type="button"
-              className="btn big"
-              disabled={!canAct || !hasFix || offline}
-              onClick={() => void command('/api/anchor/marina')}
-            >
-              Marina watch
-            </button>
           </div>
         ) : null}
 
-        {phase === 'DROPPING' ? (
+        {phase === 'DROPPING' && !prefs.controlsCollapsed ? (
           <div className="btn-row">
             <button
               type="button"
@@ -644,7 +623,7 @@ export function Watch() {
           </div>
         ) : null}
 
-        {phase === 'SET' || phase === 'MARINA' ? (
+        {phase === 'SET' && !prefs.controlsCollapsed ? (
           <>
             {conditions.length > 0 ? (
               <button
@@ -659,30 +638,37 @@ export function Watch() {
               </button>
             ) : null}
             <div className="btn-row">
-              {phase === 'SET' ? (
-                <>
-                  <button
-                    type="button"
-                    className={`btn ${nudge ? 'primary' : ''}`}
-                    disabled={!canAct}
-                    onClick={() => setNudge((n) => !n)}
-                    aria-pressed={nudge}
-                  >
-                    {nudge ? 'Done adjusting' : 'Adjust anchor'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!canAct || offline}
-                    onClick={() => setTidePrompt(true)}
-                  >
-                    Tide{' '}
-                    {geometry && geometry.tideRange > 0
-                      ? `${fmtDistance(geometry.tideRange, units).value} ${fmtDistance(geometry.tideRange, units).unit}`
-                      : ''}
-                  </button>
-                </>
-              ) : null}
+              <button
+                type="button"
+                className={`btn ${nudge ? 'primary' : ''}`}
+                disabled={!canAct}
+                onClick={() => setNudge((n) => !n)}
+                aria-pressed={nudge}
+              >
+                {nudge ? 'Done adjusting' : 'Adjust anchor'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={!canAct || offline}
+                onClick={() => setTidePrompt(true)}
+              >
+                Tide{' '}
+                {geometry && geometry.tideRange > 0
+                  ? `${fmtDistance(geometry.tideRange, units).value} ${fmtDistance(geometry.tideRange, units).unit}`
+                  : ''}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={!canAct || offline}
+                onClick={() => setRodePrompt(true)}
+              >
+                Rode out{' '}
+                {geometry?.rodeEntered
+                  ? `${fmtRode(geometry.rodeLength, units).value} ${fmtRode(geometry.rodeLength, units).unit}`
+                  : ''}
+              </button>
               <button
                 type="button"
                 className={`btn ${editRadius ? 'primary' : ''}`}
@@ -701,13 +687,13 @@ export function Watch() {
                 disabled={!canAct || offline}
                 onClick={() => setConfirmWeigh(true)}
               >
-                {phase === 'MARINA' ? 'Stop marina watch' : 'Weigh anchor'}
+                Weigh anchor
               </button>
             </div>
           </>
         ) : null}
 
-        <div className="btn-row zone-row">
+        <div className="btn-row zone-row" hidden={prefs.controlsCollapsed}>
           <button
             type="button"
             className="btn"
@@ -742,10 +728,17 @@ export function Watch() {
 
       {confirmWeigh ? (
         <ConfirmDialog
-          title={phase === 'MARINA' ? 'Stop the marina watch?' : 'Weigh anchor?'}
+          title="Weigh anchor?"
           danger
-          body={<p>This ends the watch. Nothing will alarm until you drop again.</p>}
-          confirmLabel={phase === 'MARINA' ? 'Stop watching' : 'Weigh anchor'}
+          body={
+            <p>
+              This ends the watch. Nothing will alarm until you drop again.
+              {zones.length > 0
+                ? ` The ${String(zones.length)} exclusion zone${zones.length === 1 ? '' : 's'} for this anchorage will be removed.`
+                : ''}
+            </p>
+          }
+          confirmLabel="Weigh anchor"
           onConfirm={async () => {
             if (!(await command('/api/anchor/weigh', { confirm: true })))
               throw new Error('Could not end the session.');
@@ -759,6 +752,15 @@ export function Watch() {
           units={units}
           onClose={() => setDepthPrompt(false)}
           onSubmit={(depth) => command('/api/anchor/depth', { depth })}
+        />
+      ) : null}
+      {rodePrompt ? (
+        <RodeDialog
+          units={units}
+          current={session?.rodeOverride ?? null}
+          measured={geometry && !geometry.rodeEntered ? geometry.rodeLength : null}
+          onClose={() => setRodePrompt(false)}
+          onSubmit={(rodeLength) => command('/api/anchor/rode', { rodeLength })}
         />
       ) : null}
       {tidePrompt ? (
@@ -794,7 +796,6 @@ function StateGlyph({ state }: { state: WatchStateName }) {
         </svg>
       );
     case 'SET':
-    case 'MARINA':
       return (
         <svg className="glyph" viewBox="0 0 36 36" aria-hidden="true">
           <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="3" />
@@ -1086,5 +1087,81 @@ function RadiusEditor(p: {
         </button>
       </div>
     </section>
+  );
+}
+
+function RodeDialog(p: {
+  units: Units;
+  /** The entered rode, or null when the measured run is in use. */
+  current: number | null;
+  /** The measured rode when nothing has been entered, for the hint. */
+  measured: number | null;
+  onClose: () => void;
+  onSubmit: (rodeLengthM: number | null) => Promise<boolean>;
+}) {
+  const feet = p.units.rode === 'ft';
+  const show = (m: number | null) =>
+    m === null ? '' : String(Math.round((feet ? m / 0.3048 : m) * 10) / 10);
+  const [text, setText] = useState(show(p.current));
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <Dialog
+      title="Rode paid out"
+      onClose={p.onClose}
+      actions={
+        <>
+          <button type="button" className="btn" onClick={p.onClose}>
+            Cancel
+          </button>
+          {p.current !== null ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={async () => {
+                if (await p.onSubmit(null)) p.onClose();
+              }}
+            >
+              Use measured
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn primary"
+            onClick={async () => {
+              const n = Number(text);
+              if (!Number.isFinite(n) || n <= 0) {
+                setErr('Enter the rode length as a number.');
+                return;
+              }
+              if (await p.onSubmit(feet ? n * 0.3048 : n)) p.onClose();
+            }}
+          >
+            Apply
+          </button>
+        </>
+      }
+    >
+      <p>
+        How much chain or line is actually out, from the bow roller to the anchor. The swing circle
+        is then worked from this instead of from where the boat lay at “set”.
+        {p.measured !== null
+          ? ` Measured at set: ${fmtRode(p.measured, p.units).value} ${fmtRode(p.measured, p.units).unit}.`
+          : ''}
+      </p>
+      <div className="field">
+        <label htmlFor="rode-in">Rode ({feet ? 'ft' : 'm'})</label>
+        <input
+          id="rode-in"
+          type="number"
+          inputMode="decimal"
+          step="1"
+          min="0"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+        />
+      </div>
+      {err ? <p className="error">{err}</p> : null}
+    </Dialog>
   );
 }

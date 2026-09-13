@@ -29,6 +29,8 @@
   --crit-bg: #f5c9c5;
   --crit-ink: #ffffff;
   --track: #0d5fa4;
+  --ais: #c8261d;
+  --ais-track: #e07a10;
   --anchor: #101418;
   --focus: #0d5fa4;
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
@@ -60,6 +62,8 @@
   --crit-bg: #2a0602;
   --crit-ink: #000000;
   --track: #b5241c;
+  --ais: #ff5a4e;
+  --ais-track: #e8752a;
   --anchor: #d42a20;
   --focus: #ff3b2e;
   --shadow: none;
@@ -67,6 +71,10 @@
 
 * {
   box-sizing: border-box;
+}
+/* The hidden attribute must beat display rules on classes. */
+[hidden] {
+  display: none !important;
 }
 
 /* Skip link: visible only when focused. */
@@ -508,12 +516,40 @@ p {
   width: min(100%, 520px);
   padding: 1rem;
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  /* A long form (a zone with many points) scrolls inside the dialog; the
+     buttons stay put so Save is never off the bottom of a phone. */
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.dialog-body {
+  overflow-y: auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.dialog-actions {
+  margin-top: 1rem;
+  flex: none;
 }
 .dialog.danger {
   border-top-color: var(--crit);
 }
 .dialog h2 {
   margin-bottom: 0.5rem;
+}
+
+/* Zone editor: lat, lon and Delete on one line, however narrow the phone. */
+.point-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+.point-row input {
+  min-width: 0;
+  width: 100%;
 }
 
 /* ---------------------------------------------------------------- misc */
